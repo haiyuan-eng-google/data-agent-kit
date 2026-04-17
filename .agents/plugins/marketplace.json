@@ -1,17 +1,60 @@
 {
-  "name": "data-cloud-agent-kit",
+  "name": "data-agent-kit",
+  "interface": {
+    "displayName": "Data Agent Kit"
+  },
   "plugins": [
     {
-      "name": "my-plugin",
+      "name": "alloydb",
       "source": {
         "source": "local",
-        "path": "./my-plugin"
+        "path": "./alloydb"
       },
+      "description": "Create, connect, and interact with an AlloyDB for PostgreSQL database and data.",
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
       },
-      "category": "Productivity"
+      "category": "Databases"
+    },
+    {
+      "name": "alloydb-omni",
+      "source": {
+        "source": "local",
+        "path": "./alloydb-omni"
+      },
+      "description": "Create, connect, and interact with an AlloyDB Omni database and data.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "bigquery-data-analytics",
+      "source": {
+        "source": "local",
+        "path": "./bigquery-data-analytics"
+      },
+      "description": "Connect, query, and generate data insights for BigQuery datasets and data.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "cloud-sql-mysql",
+      "source": {
+        "source": "local",
+        "path": "./cloud-sql-mysql"
+      },
+      "description": "Connect and interact with a Cloud SQL for MySQL database and data.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
     },
     {
       "name": "cloud-sql-postgresql",
@@ -20,6 +63,110 @@
         "path": "./cloud-sql-postgresql"
       },
       "description": "Create, connect, and interact with a Cloud SQL for PostgreSQL database and data.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "cloud-sql-sqlserver",
+      "source": {
+        "source": "local",
+        "path": "./cloud-sql-sqlserver"
+      },
+      "description": "Connect to Cloud SQL for SQL Server.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "data-agent-kit-starter-pack",
+      "source": {
+        "source": "local",
+        "path": "./data-agent-kit-starter-pack"
+      },
+      "description": "This plugin provides a specialized suite of skills for data engineers and database practitioners working on Google Cloud. It acts as an expert assistant, allowing you to use natural language prompts in your preferred coding agent to architect complex data pipelines, transform data with dbt, write Spark and BigQuery SQL notebooks, and orchestrate end-to-end workflows across GCP's data ecosystem.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "dataproc",
+      "source": {
+        "source": "local",
+        "path": "./dataproc"
+      },
+      "description": "Connect and interact with Google Cloud Dataproc.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "firestore-native",
+      "source": {
+        "source": "local",
+        "path": "./firestore-native"
+      },
+      "description": "Connect and interact with Cloud Firestore.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "knowledge-catalog",
+      "source": {
+        "source": "local",
+        "path": "./knowledge-catalog"
+      },
+      "description": "Connect to Knowledge Catalog to discover, manage, monitor, and govern data and AI artifacts across your data platform.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "looker",
+      "source": {
+        "source": "local",
+        "path": "./looker"
+      },
+      "description": "Connect to Looker.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "oracledb",
+      "source": {
+        "source": "local",
+        "path": "./oracledb"
+      },
+      "description": "Connect, query, and interact with Oracle Databases and their data within Gemini CLI.",
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Databases"
+    },
+    {
+      "name": "spanner",
+      "source": {
+        "source": "local",
+        "path": "./spanner"
+      },
+      "description": "Connect and interact with Spanner data using natural language.",
       "policy": {
         "installation": "AVAILABLE",
         "authentication": "ON_INSTALL"
