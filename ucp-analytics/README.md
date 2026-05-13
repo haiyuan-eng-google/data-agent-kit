@@ -1,290 +1,94 @@
-# Universal Commerce Protocol Analytics
+# UCP Analytics — Sample Implementation
 
-**BigQuery-backed commerce analytics for the
-[Universal Commerce Protocol (UCP)](https://ucp.dev).**
+A single-file reference for capturing
+[Universal Commerce Protocol](https://ucp.dev) (UCP) traffic from an
+[httpx](https://www.python-httpx.org/) client and streaming events
+into a partitioned, clustered BigQuery table.
 
-[Documentation](https://ucp.dev) |
-[Specification](https://ucp.dev/specification/overview) |
-[Discussions](https://github.com/Universal-Commerce-Protocol/ucp/discussions)
+This is a **sample**, not a framework. The whole adapter is
+`ucp_analytics.py` (~550 lines). Read it, copy it into your project,
+and edit the schema / classification rules to fit your workload.
 
-## Overview
-
-UCP defines the protocol for agentic commerce — but ships no observability.
-This package automatically captures checkout sessions, order lifecycle,
-payment flows, capability negotiation, and identity linking events into
-BigQuery for funnel analysis, error debugging, latency monitoring, and
-revenue attribution.
-
-Three integration points — pick any or combine:
-
-| Integration | Side | One-liner |
-|---|---|---|
-| **FastAPI middleware** | Merchant server | `app.add_middleware(UCPAnalyticsMiddleware, tracker=t)` |
-| **HTTPX event hook** | Agent / platform | `httpx.AsyncClient(event_hooks={"response": [hook]})` |
-| **ADK plugin** *(optional)* | Google ADK agent | `Runner(plugins=[UCPAgentAnalyticsPlugin(...)])` |
-
-```
- Platform (Agent)                    Business (Merchant)
- ┌───────────────┐                   ┌───────────────────┐
- │ httpx client   │                   │ FastAPI server     │
- │ + EventHook  ─────── REST ──────────► + Middleware     │
- └───────┬───────┘                   └────────┬──────────┘
-         │                                    │
-         └──────────┬─────────────────────────┘
-                    ▼
-           UCPAnalyticsTracker
-           ├── UCPResponseParser   (classify + extract)
-           └── AsyncBigQueryWriter (batch + flush)
-                    │
-                    ▼
-               BigQuery
-          PARTITION BY timestamp
-          CLUSTER BY event_type,
-            checkout_session_id,
-            merchant_host
-```
-
-## Installation
+## Install
 
 ```bash
-# Core (tracker + HTTPX hook)
-pip install ucp-analytics
-
-# With FastAPI middleware
-pip install ucp-analytics[fastapi]
-
-# With Google ADK plugin adapter
-pip install ucp-analytics[adk]
+git clone https://github.com/haiyuan-eng-google/data-agent-kit.git
+cd data-agent-kit/ucp-analytics
+pip install -e .
 ```
 
-Or install from source:
-
-```bash
-git clone https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics.git
-cd Universal-Commerce-Protocol-Analytics
-uv sync
-```
-
-## Quick Start
-
-### Merchant server (FastAPI)
-
-Add two lines to your UCP `server.py`:
+## Usage
 
 ```python
-import os
-from ucp_analytics import UCPAnalyticsTracker, UCPAnalyticsMiddleware
-
-tracker = UCPAnalyticsTracker(
-    project_id=os.environ.get("GCP_PROJECT_ID", "your-gcp-project-id"),
-    app_name="flower_shop",
-)
-app.add_middleware(UCPAnalyticsMiddleware, tracker=tracker)
-
-@app.on_event("shutdown")
-async def shutdown():
-    await tracker.close()  # drains in-flight tasks, then flushes
-```
-
-> **Note:** `UCPAnalyticsMiddleware` requires the `[fastapi]` extra.
-> The middleware is lazy-loaded so the core package works without starlette installed.
-
-### Agent / platform client (HTTPX)
-
-```python
-import os
+import asyncio
 import httpx
-from ucp_analytics import UCPAnalyticsTracker, UCPClientEventHook
+from ucp_analytics import BQWriter, UCPTracker, make_event_hook
 
-tracker = UCPAnalyticsTracker(
-    project_id=os.environ.get("GCP_PROJECT_ID", "your-gcp-project-id"),
-    app_name="shopping_agent",
-)
-hook = UCPClientEventHook(tracker)
+async def main():
+    writer = BQWriter(
+        project_id="my-gcp-project",
+        dataset_id="ucp_analytics",
+        table_id="ucp_events",
+    )
+    tracker = UCPTracker(writer)
 
-client = httpx.AsyncClient(event_hooks={"response": [hook]})
+    async with httpx.AsyncClient(
+        event_hooks={"response": [make_event_hook(tracker)]},
+    ) as client:
+        await client.get("https://merchant.example.com/.well-known/ucp")
+        await client.post(
+            "https://merchant.example.com/checkout-sessions",
+            json={"line_items": [{"item": {"id": "roses"}, "quantity": 1}]},
+        )
+
+    await writer.close()  # drain + close
+
+asyncio.run(main())
 ```
 
-Every call to `/checkout-sessions`, `/.well-known/ucp`, `/orders`, `/carts`,
-`/webhooks`, etc. is automatically classified and written to BigQuery.
+Every UCP request through that client produces one BigQuery row.
 
-## Events Tracked
+## Smoke test (no GCP credentials needed)
 
-Every UCP event type is auto-classified from HTTP method + path + response body. The canonical list lives in [`src/ucp_analytics/events.py::UCPEventType`](src/ucp_analytics/events.py); the groups below are the categorical view.
-
-### Checkout (6)
-
-| HTTP Operation | Event Type |
-|---|---|
-| `POST /checkout-sessions` | `checkout_session_created` |
-| `GET /checkout-sessions/{id}` | `checkout_session_get` |
-| `PUT /checkout-sessions/{id}` | `checkout_session_updated` |
-| `PUT /checkout-sessions/{id}` *(status=requires_escalation)* | `checkout_escalation` |
-| `POST /checkout-sessions/{id}/complete` | `checkout_session_completed` |
-| `POST /checkout-sessions/{id}/cancel` | `checkout_session_canceled` |
-
-### Cart (4)
-
-| HTTP Operation | Event Type |
-|---|---|
-| `POST /carts` | `cart_created` |
-| `GET /carts/{id}` | `cart_get` |
-| `PUT /carts/{id}` | `cart_updated` |
-| `POST /carts/{id}/cancel` | `cart_canceled` |
-
-### Catalog (3)
-
-| HTTP Operation | Event Type |
-|---|---|
-| `POST /catalog/search` | `catalog_search` |
-| `POST /catalog/lookup` | `catalog_lookup` |
-| `POST /catalog/product` | `catalog_product_get` |
-
-### Order (8)
-
-Order lifecycle at UCP `c5c6139` derives from `fulfillment.events[]` and `adjustments[]`; legacy top-level `status` is the fallback for pre-c5c6139 senders.
-
-| HTTP Operation | Event Type |
-|---|---|
-| `POST /orders` | `order_created` |
-| `GET /orders/{id}` *(no lifecycle)* | `order_get` |
-| `PUT /orders/{id}` *(no lifecycle)* | `order_updated` |
-| `GET`/`PUT` `/orders/{id}` *(latest fulfillment event is shipped or in_transit)* | `order_shipped` |
-| `GET`/`PUT` `/orders/{id}` *(...is delivered)* | `order_delivered` |
-| `GET`/`PUT` `/orders/{id}` *(...is returned_to_sender, or adjustments[].type is refund/return)* | `order_returned` |
-| `GET`/`PUT` `/orders/{id}` *(...is canceled/undeliverable, or adjustments[].type is cancellation)* | `order_canceled` |
-| Webhook delivery (path or `Webhook-Id` + `Webhook-Timestamp` header pair) without recognizable lifecycle | `order_webhook_received` |
-
-### Identity (3)
-
-| HTTP Operation | Event Type |
-|---|---|
-| `POST /identity` | `identity_link_initiated` |
-| `GET /identity/callback` | `identity_link_completed` |
-| `POST /identity/revoke` | `identity_link_revoked` |
-
-### Payment (4)
-
-| Event Type | Description |
-|---|---|
-| `payment_handler_negotiated` | Platform + merchant handler intersection computed |
-| `payment_instrument_selected` | Buyer selects payment instrument |
-| `payment_completed` | Payment succeeds |
-| `payment_failed` | Payment fails |
-
-### Discovery (2)
-
-| HTTP Operation | Event Type |
-|---|---|
-| `GET /.well-known/ucp` | `profile_discovered` |
-| Capability exchange | `capability_negotiated` |
-
-### Fallback (2)
-
-| Condition | Event Type |
-|---|---|
-| Any unmatched path, status >= 400 | `error` |
-| Any unmatched path, status < 400 | `request` |
-
-Webhook paths use the **request body** (order payload) for classification since
-the response is typically an ack. Webhook 4xx/5xx responses classify as `error`.
-
-## Configuration
-
-```python
-import os
-
-UCPAnalyticsTracker(
-    project_id=os.environ.get("GCP_PROJECT_ID"),  # required — GCP project
-    dataset_id="ucp_analytics",     # BigQuery dataset
-    table_id="ucp_events",          # BigQuery table
-    app_name="flower_shop",         # tags every event
-    batch_size=50,                  # flush every N events
-    auto_create_table=True,         # create table on first write
-    redact_pii=False,               # redact email, phone, address
-    custom_metadata={"env": "prod"},
-)
+```bash
+python ucp_analytics.py
 ```
 
-The underlying `AsyncBigQueryWriter` also accepts `max_buffer_size`
-(default: 10,000) to cap in-memory buffering when BigQuery is unreachable.
+Runs five synthetic responses through the parser and prints the
+resulting rows as JSON lines so you can verify the
+classifier / extractor without hitting BigQuery.
 
-**BigQuery schema notes (v0.2 spec alignment):** The schema uses `fulfillment_amount`
-(replacing the earlier `shipping_amount`) to align with UCP spec total types. Additional
-fields include `items_discount_amount`, `fee_amount`, `discount_codes_json`,
-`discount_applied_json` (discount extension), `expires_at`, `continue_url`
-(checkout metadata), and `permalink_url` (order permalink).
+## What it does
 
-## Examples
+| Surface | Code |
+|---|---|
+| Path-based classifier (checkout / cart / catalog / order / identity / discovery / error / fallback) | `classify(method, path, status)` |
+| Body-field extractor (id, currency, total amount, first error code) | `extract_fields(body)` |
+| Async buffered streaming insert into a partitioned, clustered table | `BQWriter` |
+| `httpx` response event hook gluing the two together | `UCPTracker.record` + `make_event_hook` |
 
-Eight runnable examples are included — see [`examples/README.md`](examples/README.md) for full details.
+Schema is 13 columns, defined as a list of tuples at the top of
+`ucp_analytics.py`. Add columns there when your dashboards need them.
 
-| Example | BigQuery? | Transport | Coverage |
-|---|---|---|---|
-| [`e2e_demo.py`](examples/e2e_demo.py) | No (SQLite) | REST | Checkout happy path (5 types) |
-| [`scenarios_demo.py`](examples/scenarios_demo.py) | Yes | REST | Errors, cancellation, escalation (7 types) |
-| [`cart_demo.py`](examples/cart_demo.py) | Yes | REST | Cart CRUD + checkout conversion (6 types) |
-| [`order_lifecycle_demo.py`](examples/order_lifecycle_demo.py) | Yes | REST | Order delivered/returned/canceled (8 types) |
-| [`transport_demo.py`](examples/transport_demo.py) | Yes | REST/MCP/A2A | All 3 transports compared (5 types) |
-| [`identity_payment_demo.py`](examples/identity_payment_demo.py) | Yes | REST | Identity linking + payment flows (10 types) |
-| [`bq_demo.py`](examples/bq_demo.py) | Yes | REST/MCP/A2A | Every event type, 3 transports, BQ verification |
-| [`bq_adk_demo.py`](examples/bq_adk_demo.py) | Yes | ADK/MCP/A2A | Every event type via ADK plugin, BQ verification |
+## What it doesn't do (fork for any of this)
 
-Shared configuration lives in [`examples/_demo_utils.py`](examples/_demo_utils.py).
-Set `GCP_PROJECT_ID` in your environment or edit the file directly.
+- FastAPI / Starlette server-side middleware
+- Google ADK plugin
+- MCP / A2A / JSON-RPC transport handling
+- HTTP message signing (RFC 9421) parsing
+- `WWW-Authenticate` Bearer challenge parsing (RFC 7235 / 6750)
+- Standard Webhooks header-pair detection and lifecycle derivation
+  from `fulfillment.events[]` / `adjustments[]`
+- AP2 mandates, authorization signals, embedded checkout config,
+  OAuth identity-linking discovery
+- PII redaction
+- Per-PR / per-merchant column splits
 
-## Dashboard Queries
-
-See [`dashboards/queries.sql`](dashboards/queries.sql) for 10 ready-to-use
-BigQuery queries: checkout funnel, revenue by merchant, payment handler mix,
-capability adoption, error analysis, escalation rate, latency percentiles,
-fulfillment geography, session timeline, and discovery-to-checkout rate.
-
-## Repository Structure
-
-```
-Universal-Commerce-Protocol-Analytics/
-├── src/ucp_analytics/
-│   ├── __init__.py                 # public API exports (lazy-loads middleware)
-│   ├── events.py                   # UCPEvent, UCPEventType, CheckoutStatus
-│   ├── parser.py                   # classify HTTP→event, extract fields
-│   ├── writer.py                   # AsyncBigQueryWriter (batch + DDL)
-│   ├── tracker.py                  # UCPAnalyticsTracker (orchestrator)
-│   ├── middleware.py               # FastAPI/Starlette ASGI middleware
-│   ├── client_hooks.py             # HTTPX event hook for agent clients
-│   └── adk_plugin.py              # optional ADK BasePlugin adapter
-├── tests/
-│   ├── test_parser.py              # classify + extract unit tests
-│   ├── test_events.py              # UCPEvent + enum tests
-│   ├── test_tracker.py             # tracker + PII redaction tests
-│   ├── test_writer.py              # buffer, flush, retry, DDL tests
-│   └── test_client_hooks.py        # HTTPX hook tests
-├── examples/
-│   ├── _demo_utils.py              # shared BQ config (PROJECT_ID, helpers)
-│   ├── e2e_demo.py                 # self-contained demo (no GCP)
-│   ├── scenarios_demo.py           # error paths + edge cases
-│   ├── cart_demo.py                # cart lifecycle
-│   ├── order_lifecycle_demo.py     # order lifecycle
-│   ├── transport_demo.py           # REST vs MCP vs A2A
-│   ├── identity_payment_demo.py    # identity + payment flows
-│   ├── bq_demo.py                  # comprehensive BQ demo (every event type)
-│   ├── bq_adk_demo.py             # comprehensive ADK demo (every event type)
-│   └── README.md                   # example guide with run instructions
-├── dashboards/queries.sql          # 10 BigQuery analytics queries
-├── docs/
-│   ├── design_doc.md               # design document
-│   └── bigquery-ucp-analytics.md   # BigQuery schema + usage guide
-├── pyproject.toml                  # hatchling + uv + ruff
-└── uv.lock                        # pinned dependencies
-```
-
-## Contributing
-
-We welcome community contributions. See the UCP
-[Contribution Guide](https://github.com/Universal-Commerce-Protocol/ucp/blob/main/CONTRIBUTING.md)
-for details.
+The classifier is deliberately a flat list of substring checks; the
+extractor knows about exactly four body fields. Both are easy to
+read and easy to grow.
 
 ## License
 
-UCP is an open-source project under the
-[Apache License 2.0](LICENSE).
+[Apache 2.0](../LICENSE), inherited from the Data Agent Kit
+repository.
