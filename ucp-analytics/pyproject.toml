@@ -1,0 +1,65 @@
+[project]
+name = "ucp-analytics"
+version = "0.2.0"
+description = "BigQuery-backed commerce analytics for the Universal Commerce Protocol (UCP)"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.10"
+authors = [
+    { name = "Haiyuan Cao", email = "haiyuan-eng-google@users.noreply.github.com" },
+]
+keywords = ["ucp", "commerce", "analytics", "bigquery", "agentic", "checkout"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Financial",
+]
+
+dependencies = [
+    "google-cloud-bigquery>=3.20.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+sdk = ["ucp-sdk"]
+fastapi = ["fastapi>=0.110.0", "starlette>=0.36.0"]
+adk = ["google-adk>=1.0.0"]
+all = ["ucp-analytics[sdk,fastapi,adk]"]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[project.urls]
+Homepage = "https://ucp.dev"
+Repository = "https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics"
+Specification = "https://ucp.dev/specification/overview"
+Discussions = "https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics/discussions"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ucp_analytics"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+pythonpath = ["src"]
+
+[tool.uv.sources]
+ucp-sdk = { git = "https://github.com/Universal-Commerce-Protocol/python-sdk.git" }
