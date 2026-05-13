@@ -20,7 +20,7 @@ server-side webhook handlers). 27 + 6 − 1 = 32.
 ## Install
 
 ```bash
-git clone https://github.com/haiyuan-eng-google/data-agent-kit.git
+git clone https://github.com/GoogleCloudPlatform/data-agent-kit.git
 cd data-agent-kit/ucp-analytics
 
 # Only two runtime deps; install them however your project does it.
