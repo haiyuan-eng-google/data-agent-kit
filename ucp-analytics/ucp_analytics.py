@@ -67,13 +67,14 @@ Usage:
     async with httpx.AsyncClient(
         event_hooks={"response": [make_event_hook(tracker)]},
     ) as c:
-        # HTTPX traffic — parser captures 26 event types.
+        # HTTPX traffic — parser derives 27 event types.
         await c.post(
             "https://merchant.example.com/checkout-sessions",
             json={"line_items": [...]},
         )
 
-    # Agent-decision moments — 6 more event types via SampleAgent.
+    # Agent-decision moments — 6 SampleAgent calls (5 unique types
+    # plus an overlap on order_webhook_received with the parser).
     await agent.payment_completed(
         checkout_session_id="chk_abc", currency="USD", total_amount=3249,
     )
