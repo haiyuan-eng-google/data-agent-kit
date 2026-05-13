@@ -64,7 +64,7 @@ pipeline, which batches rows and streams them into a partitioned, clustered BigQ
 | **GCP Project** | BigQuery API enabled |
 | **Auth (local)** | `gcloud auth application-default login` |
 | **Python** | 3.10+ |
-| **Package** | `pip install ucp-analytics` (core) |
+| **Source** | Clone the [Data Agent Kit](https://github.com/haiyuan-eng-google/data-agent-kit) repository (see Installation below) |
 
 ### Enable BigQuery API
 
@@ -93,27 +93,29 @@ gcloud auth application-default login
 
 ## Installation
 
+Install from source by cloning the [Data Agent Kit](https://github.com/haiyuan-eng-google/data-agent-kit)
+repository and using the `ucp-analytics/` folder directly:
+
 ```bash
-# Core (tracker + HTTPX hook)
-pip install ucp-analytics
-
-# With FastAPI middleware support
-pip install ucp-analytics[fastapi]
-
-# With Google ADK plugin adapter
-pip install ucp-analytics[adk]
-
-# All extras
-pip install ucp-analytics[fastapi,adk]
+git clone https://github.com/haiyuan-eng-google/data-agent-kit.git
+cd data-agent-kit/ucp-analytics
 ```
 
-Or install from source with [uv](https://docs.astral.sh/uv/):
+Then install with pip in editable mode (so changes to the source tree are
+picked up without reinstalling):
 
 ```bash
-git clone https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics.git
-cd Universal-Commerce-Protocol-Analytics
-uv sync              # core
-uv sync --all-extras # all extras
+pip install -e .                  # Core (tracker + HTTPX hook)
+pip install -e ".[fastapi]"       # With FastAPI middleware
+pip install -e ".[adk]"           # With Google ADK plugin adapter
+pip install -e ".[fastapi,adk]"   # All extras
+```
+
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv sync              # Core
+uv sync --all-extras # All extras
 ```
 
 ---
@@ -168,7 +170,8 @@ async def shutdown():
      for classification and field extraction, since the response is just an ack
 6. Non-UCP paths pass through with zero overhead
 
-> **Requires:** `pip install ucp-analytics[fastapi]`
+> **Requires:** the `[fastapi]` extra (`pip install -e ".[fastapi]"` from
+> `data-agent-kit/ucp-analytics/`).
 
 ### Integration 2: HTTPX Client Hook (Agent / Platform)
 
@@ -241,7 +244,8 @@ await plugin.close()
 8. Writes the event to BigQuery
 9. Non-UCP tools (e.g., `get_weather`) are silently skipped
 
-> **Requires:** `pip install ucp-analytics[adk]`
+> **Requires:** the `[adk]` extra (`pip install -e ".[adk]"` from
+> `data-agent-kit/ucp-analytics/`).
 
 #### ADK Tool Name Mapping
 
@@ -1139,4 +1143,5 @@ DROP TABLE IF EXISTS `project.ucp_analytics.ucp_events`;
 - [UCP Developer Docs](https://ucp.dev)
 - [Design Doc](design_doc.md)
 - [Dashboard Queries](../dashboards/queries.sql)
-- [GitHub Issues](https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics/issues)
+- [GitHub Issues](https://github.com/haiyuan-eng-google/data-agent-kit/issues)
+  (in the Data Agent Kit repository)

@@ -6,14 +6,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [0.2.0] — 2026-05-11
 
-Completes the alignment of the UCP analytics package with the UCP spec at
+Completes the alignment of this module with the UCP spec at
 [`c5c6139`](https://github.com/Universal-Commerce-Protocol/ucp/commit/c5c6139)
-(the identity-linking OAuth foundation merge). All concrete acceptance
-rows from issue
-[#8](https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics/issues/8)
-are landed. Runtime Embedded Checkout postMessage events (`ec.totals.change`,
-link delegation acceptance, reauth, cart binding) remain deferred until
-host-side instrumentation exists.
+(the identity-linking OAuth foundation merge). All concrete acceptance rows
+from the spec-alignment plan are landed. Runtime Embedded Checkout
+postMessage events (`ec.totals.change`, link delegation acceptance, reauth,
+cart binding) remain deferred until host-side instrumentation exists.
 
 ### Added
 
@@ -154,6 +152,3 @@ host-side instrumentation exists.
 Initial release. UCP analytics tracker with FastAPI middleware, HTTPX
 client hook, BigQuery writer, and ADK plugin. Supported UCP spec
 version: `2026-04-08`.
-
-[0.2.0]: https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics/releases/tag/v0.1.0
