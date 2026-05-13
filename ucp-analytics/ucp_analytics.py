@@ -1,30 +1,37 @@
 """ucp_analytics — sample HTTPX → BigQuery commerce-observability adapter
 for the Universal Commerce Protocol (UCP).
 
-This is a single-file reference implementation. It exposes three small
-moving parts:
+Single-file reference implementation. Four moving parts:
 
     1. ``classify(...)`` and ``extract_fields(...)`` — pure functions
        that turn an HTTP method/path/body into a UCPEvent.
     2. ``BQWriter`` — an async buffered writer that streams batches of
        rows into a partitioned, clustered BigQuery table.
-    3. ``UCPTracker.record(response)`` plus ``make_event_hook(tracker)``
-       — glue that lets you attach the tracker as an httpx response
-       event hook.
+    3. ``UCPTracker`` — orchestrator. ``.record(response)`` plugs into
+       an httpx response event hook (via ``make_event_hook``);
+       ``.record_event(event)`` is the manual entry point for events
+       that don't pass through HTTPX traffic.
+    4. ``SampleAgent`` — reference shape for a UCP shopping agent
+       showing where to emit the analytics events the parser can't
+       see (payment outcomes, capability negotiation, inbound
+       webhook receipts).
 
-The goal is to be small enough to read in one sitting and copy into
-your own project. Fork the file and add the columns, classification
-rules, batching strategy, redaction, and retry policy your workload
-needs. Anything fancy (FastAPI middleware, ADK plugin, MCP/A2A
-transports, HTTP message signing, AP2 mandates, signals, OAuth
-discovery, embedded checkout, Standard Webhooks header parsing,
-RFC 7235 Bearer challenge parsing, fulfillment-events lifecycle
-derivation, PII redaction) is intentionally out of scope.
+Together these cover all 32 event types in the UCP spec: 26 via the
+parser, 6 via the agent. Read the file end-to-end, then copy what
+you need into your own project and grow it from there.
+
+Anything fancy from a full framework (FastAPI middleware, Google ADK
+plugin, MCP/A2A JSON-RPC transports, HTTP message signing parsing,
+AP2 mandates, authorization signals, embedded checkout config,
+RFC 7235 Bearer challenge parsing, PII redaction) is intentionally
+out of scope. Fork the file when you need any of that.
 
 Usage:
 
     import httpx
-    from ucp_analytics import BQWriter, UCPTracker, make_event_hook
+    from ucp_analytics import (
+        BQWriter, UCPTracker, SampleAgent, make_event_hook,
+    )
 
     writer = BQWriter(
         project_id="my-gcp-project",
@@ -32,18 +39,27 @@ Usage:
         table_id="ucp_events",
     )
     tracker = UCPTracker(writer)
-    hook = make_event_hook(tracker)
+    agent = SampleAgent(tracker)
 
-    async with httpx.AsyncClient(event_hooks={"response": [hook]}) as c:
+    async with httpx.AsyncClient(
+        event_hooks={"response": [make_event_hook(tracker)]},
+    ) as c:
+        # HTTPX traffic — parser captures 26 event types.
         await c.post(
             "https://merchant.example.com/checkout-sessions",
             json={"line_items": [...]},
         )
 
-    await writer.close()  # drains the buffer and closes the BQ client
+    # Agent-decision moments — 6 more event types via SampleAgent.
+    await agent.payment_completed(
+        checkout_session_id="chk_abc", currency="USD", total_amount=3249,
+    )
+
+    await writer.close()  # drain the buffer and close the BQ client
 
 Run ``python ucp_analytics.py`` with no arguments for a stdout-only
-smoke test of the parser + writer (no GCP credentials required).
+smoke test covering all 32 UCP event types (no GCP credentials
+required).
 """
 
 from __future__ import annotations
@@ -121,14 +137,20 @@ SCHEMA: List[Tuple[str, str, str]] = [
 
 # Path substrings that mark a request as UCP traffic. The HTTPX hook
 # filters on these so non-UCP requests through the same client don't
-# get recorded.
+# get recorded. Webhook prefixes are included so an agent's inbound
+# webhook receiver (if it makes HTTPX-visible calls) gets captured;
+# real webhook capture typically lives in your server-side middleware
+# and would call ``tracker.record_event`` directly.
 UCP_PATH_HINTS: Tuple[str, ...] = (
     "/checkout-sessions",
     "/carts",
     "/catalog",
     "/orders",
     "/identity",
-    "/.well-known/ucp",
+    "/oauth2",
+    "/.well-known/",
+    "/webhooks",
+    "/webhook",
 )
 
 
@@ -137,19 +159,107 @@ def is_ucp_path(path: str) -> bool:
     return any(hint in path for hint in UCP_PATH_HINTS)
 
 
-def classify(method: str, path: str, status_code: int) -> str:
-    """Map HTTP method + path + status to a UCP event type.
+# Well-known fulfillment.events[].type values mapped to ORDER_* lifecycle
+# event types per UCP order.md (c5c6139 schema). Anything else is left
+# alone; the order falls back to order_get / order_updated / etc.
+_FULFILLMENT_TYPE_TO_EVENT = {
+    "shipped": "order_shipped",
+    "in_transit": "order_shipped",
+    "delivered": "order_delivered",
+    "returned_to_sender": "order_returned",
+    "canceled": "order_canceled",
+    "cancelled": "order_canceled",
+    "undeliverable": "order_canceled",
+}
+_ADJUSTMENT_TYPE_TO_EVENT = {
+    "refund": "order_returned",
+    "return": "order_returned",
+    "cancellation": "order_canceled",
+}
 
-    Intentionally simple: a flat list of substring checks. Real-world
-    deployments often need a richer matcher (segment-aware,
-    mount-prefix-aware, header-aware for webhook delivery); copy this
-    function out and grow it as needed.
+
+def _lifecycle_from_body(body: Optional[Any]) -> Optional[str]:
+    """Derive an order_* event type from a UCP order response body.
+
+    Priority (matches UCP order.md c5c6139):
+      1. Last entry of ``fulfillment.events[]`` — the append-only
+         shipment log; latest event wins.
+      2. Last entry of ``adjustments[]`` — post-order events
+         (refunds, returns, cancellations) when no fulfillment event
+         carries lifecycle.
+      3. Legacy top-level ``status`` — for pre-c5c6139 senders that
+         still ship the flat shape.
+
+    Returns None when no lifecycle signal is present — caller falls
+    back to the generic ``order_get`` / ``order_updated`` /
+    ``order_webhook_received`` it was about to emit.
+    """
+    if not isinstance(body, dict):
+        return None
+
+    fulfillment = body.get("fulfillment")
+    if isinstance(fulfillment, dict):
+        events = fulfillment.get("events")
+        if isinstance(events, list) and events:
+            last = events[-1] if isinstance(events[-1], dict) else None
+            if last:
+                t = str(last.get("type") or "").lower()
+                mapped = _FULFILLMENT_TYPE_TO_EVENT.get(t)
+                if mapped:
+                    return mapped
+
+    adjustments = body.get("adjustments")
+    if isinstance(adjustments, list) and adjustments:
+        last = adjustments[-1] if isinstance(adjustments[-1], dict) else None
+        if last:
+            t = str(last.get("type") or "").lower()
+            mapped = _ADJUSTMENT_TYPE_TO_EVENT.get(t)
+            if mapped:
+                return mapped
+
+    status = str(body.get("status") or "").lower()
+    if status == "shipped":
+        return "order_shipped"
+    if status == "delivered":
+        return "order_delivered"
+    if status == "returned":
+        return "order_returned"
+    if status in ("canceled", "cancelled"):
+        return "order_canceled"
+
+    return None
+
+
+def classify(
+    method: str, path: str, status_code: int,
+    body: Optional[Any] = None,
+) -> str:
+    """Map HTTP method + path + status (+ optional body) to a UCP event type.
+
+    Intentionally simple: a flat list of substring checks plus a tiny
+    body inspector for lifecycle derivation. Real-world deployments
+    often need a richer matcher (segment-aware, mount-prefix-aware,
+    Standard-Webhooks-header-aware for inbound webhook delivery); copy
+    this function out and grow it as needed.
+
+    Coverage: 26 of the 32 UCP spec event types. The other 6 fire at
+    agent decision moments (payment outcomes, capability negotiation,
+    inbound webhook receipt outside this client's view) and need
+    explicit ``tracker.record_event`` calls — see ``SampleAgent``
+    below for the shape.
     """
     m = method.upper()
     p = path.rstrip("/")
 
+    # Discovery (REST + OAuth identity-linking metadata).
     if p.endswith("/.well-known/ucp"):
         return "profile_discovered"
+    if (
+        p.endswith("/.well-known/oauth-authorization-server")
+        or p.endswith("/.well-known/openid-configuration")
+        or p.endswith("/.well-known/oauth-protected-resource")
+    ):
+        return "identity_link_initiated"
 
     if "/checkout-sessions" in p:
         if p.endswith("/complete") and m == "POST":
@@ -159,6 +269,9 @@ def classify(method: str, path: str, status_code: int) -> str:
         if m == "POST":
             return "checkout_session_created"
         if m == "PUT":
+            # Escalation override: response body governs.
+            if isinstance(body, dict) and body.get("status") == "requires_escalation":
+                return "checkout_escalation"
             return "checkout_session_updated"
         if m == "GET":
             return "checkout_session_get"
@@ -180,15 +293,31 @@ def classify(method: str, path: str, status_code: int) -> str:
     if "/catalog/product" in p:
         return "catalog_product_get"
 
+    # Order webhooks — POST to /webhook(s)/... carrying an order body.
+    # Lifecycle wins when the body has it; otherwise generic receipt.
+    if "/webhooks" in p or "/webhook" in p:
+        if status_code and status_code >= 400:
+            return "error"
+        lifecycle = _lifecycle_from_body(body)
+        return lifecycle or "order_webhook_received"
+
     if "/orders" in p:
         if m == "POST":
             return "order_created"
+        # Lifecycle from body wins on GET/PUT alike.
+        lifecycle = _lifecycle_from_body(body)
+        if lifecycle:
+            return lifecycle
         if m == "PUT":
             return "order_updated"
-        if m == "GET":
-            return "order_get"
+        return "order_get"
 
-    if "/identity" in p:
+    # Identity linking (/identity/*, /oauth2/*).
+    if "/identity" in p or "/oauth2" in p:
+        if "/revoke" in p or m == "DELETE":
+            return "identity_link_revoked"
+        if "/callback" in p or "/oauth2/token" in p:
+            return "identity_link_completed"
         return "identity_link_initiated"
 
     if status_code and status_code >= 400:
@@ -411,9 +540,17 @@ class BQWriter:
 # ---------------------------------------------------------------------------
 
 class UCPTracker:
-    """Connects the parser to a writer. ``record(response)`` is the
-    single entry point — call it from an httpx response event hook,
-    a FastAPI middleware, or your own custom integration."""
+    """Connects the parser to a writer.
+
+    Two entry points:
+
+      * ``record(response)`` — drive from HTTPX response traffic.
+        Parses method/path/body, classifies, extracts fields, enqueues.
+      * ``record_event(event)`` — for events that don't pass through
+        HTTPX (agent decision moments, server-side webhook receipts,
+        out-of-band lifecycle pings). ``SampleAgent`` below shows the
+        common cases.
+    """
 
     def __init__(self, writer: BQWriter) -> None:
         self.writer = writer
@@ -443,7 +580,9 @@ class UCPTracker:
             latency_ms = round(elapsed.total_seconds() * 1000, 2)
 
         event = UCPEvent(
-            event_type=classify(request.method, path, response.status_code),
+            event_type=classify(
+                request.method, path, response.status_code, body,
+            ),
             http_method=request.method.upper(),
             http_path=path,
             http_status_code=response.status_code,
@@ -452,6 +591,129 @@ class UCPTracker:
             **extract_fields(body),
         )
         await self.writer.enqueue(event.to_bq_row())
+
+    async def record_event(self, event: UCPEvent) -> None:
+        """Enqueue a pre-built event. For things HTTPX can't see:
+        agent payment decisions, capability negotiation outcomes,
+        inbound webhook receipts processed by your server-side
+        handler, lifecycle pings from out-of-band sources.
+        """
+        await self.writer.enqueue(event.to_bq_row())
+
+
+# ---------------------------------------------------------------------------
+# SampleAgent — where the parser stops and your agent code starts
+# ---------------------------------------------------------------------------
+
+class SampleAgent:
+    """Reference shape for a UCP shopping agent's analytics emission.
+
+    HTTPX hooks capture wire traffic; they can't see decisions the
+    agent makes between requests. These six methods are the spots in
+    a real agent loop where you'd call ``tracker.record_event`` to
+    cover the rest of the spec:
+
+      * ``capability_negotiated`` — after parsing ``/.well-known/ucp``
+        and picking which UCP feature set to use for this merchant.
+      * ``payment_handler_negotiated`` — after the agent selects a
+        payment handler (AP2 / network token / wallet) for the
+        session.
+      * ``payment_instrument_selected`` — when the user picks a card
+        / wallet / saved instrument.
+      * ``payment_completed`` / ``payment_failed`` — terminal payment
+        outcomes the merchant returned (often piggybacked on
+        checkout_session_completed, but worth emitting separately so
+        payment dashboards don't have to dig into checkout bodies).
+      * ``webhook_received`` — inbound webhook your server-side
+        handler accepted (the HTTPX-side parser only sees outbound
+        traffic; webhook delivery is inbound).
+
+    Copy or subclass; nothing here is load-bearing beyond the
+    ``record_event`` call.
+    """
+
+    def __init__(self, tracker: UCPTracker) -> None:
+        self.tracker = tracker
+
+    async def capability_negotiated(
+        self,
+        *,
+        merchant_host: Optional[str] = None,
+        checkout_session_id: Optional[str] = None,
+    ) -> None:
+        await self.tracker.record_event(UCPEvent(
+            event_type="capability_negotiated",
+            merchant_host=merchant_host,
+            checkout_session_id=checkout_session_id,
+        ))
+
+    async def payment_handler_negotiated(
+        self,
+        *,
+        checkout_session_id: Optional[str] = None,
+        merchant_host: Optional[str] = None,
+    ) -> None:
+        await self.tracker.record_event(UCPEvent(
+            event_type="payment_handler_negotiated",
+            checkout_session_id=checkout_session_id,
+            merchant_host=merchant_host,
+        ))
+
+    async def payment_instrument_selected(
+        self,
+        *,
+        checkout_session_id: Optional[str] = None,
+        merchant_host: Optional[str] = None,
+    ) -> None:
+        await self.tracker.record_event(UCPEvent(
+            event_type="payment_instrument_selected",
+            checkout_session_id=checkout_session_id,
+            merchant_host=merchant_host,
+        ))
+
+    async def payment_completed(
+        self,
+        *,
+        checkout_session_id: Optional[str] = None,
+        order_id: Optional[str] = None,
+        currency: Optional[str] = None,
+        total_amount: Optional[int] = None,
+        merchant_host: Optional[str] = None,
+    ) -> None:
+        await self.tracker.record_event(UCPEvent(
+            event_type="payment_completed",
+            checkout_session_id=checkout_session_id,
+            order_id=order_id,
+            currency=currency,
+            total_amount=total_amount,
+            merchant_host=merchant_host,
+        ))
+
+    async def payment_failed(
+        self,
+        *,
+        checkout_session_id: Optional[str] = None,
+        merchant_host: Optional[str] = None,
+        error_code: Optional[str] = None,
+    ) -> None:
+        await self.tracker.record_event(UCPEvent(
+            event_type="payment_failed",
+            checkout_session_id=checkout_session_id,
+            merchant_host=merchant_host,
+            error_code=error_code,
+        ))
+
+    async def webhook_received(
+        self,
+        *,
+        order_id: Optional[str] = None,
+        merchant_host: Optional[str] = None,
+    ) -> None:
+        await self.tracker.record_event(UCPEvent(
+            event_type="order_webhook_received",
+            order_id=order_id,
+            merchant_host=merchant_host,
+        ))
 
 
 def make_event_hook(tracker: UCPTracker):
@@ -494,51 +756,197 @@ class _PrintWriter:
         pass
 
 
+# All 32 UCP spec event types — the smoke test below exercises every
+# one and asserts the coverage at exit.
+ALL_UCP_EVENT_TYPES: Tuple[str, ...] = (
+    # Discovery (1)
+    "profile_discovered",
+    # Checkout (6)
+    "checkout_session_created",
+    "checkout_session_get",
+    "checkout_session_updated",
+    "checkout_session_completed",
+    "checkout_session_canceled",
+    "checkout_escalation",
+    # Cart (4)
+    "cart_created",
+    "cart_get",
+    "cart_updated",
+    "cart_canceled",
+    # Catalog (3)
+    "catalog_search",
+    "catalog_lookup",
+    "catalog_product_get",
+    # Order (8)
+    "order_created",
+    "order_get",
+    "order_updated",
+    "order_shipped",
+    "order_delivered",
+    "order_returned",
+    "order_canceled",
+    "order_webhook_received",
+    # Identity linking (3)
+    "identity_link_initiated",
+    "identity_link_completed",
+    "identity_link_revoked",
+    # Fallback (2)
+    "error",
+    "request",
+    # Agent-emitted — not visible to HTTPX (5)
+    "capability_negotiated",
+    "payment_handler_negotiated",
+    "payment_instrument_selected",
+    "payment_completed",
+    "payment_failed",
+)
+
+
 async def _smoke_test() -> None:
-    """Run a handful of fake responses through the parser."""
+    """Drive fake responses + agent calls through the full pipeline
+    and assert that every event in ``ALL_UCP_EVENT_TYPES`` was emitted.
+
+    No GCP credentials needed — uses ``_PrintWriter`` to dump rows as
+    JSON lines. Exits non-zero if coverage regresses.
+    """
+    from datetime import timedelta
+
     writer = _PrintWriter()
     tracker = UCPTracker(writer)  # type: ignore[arg-type]
+    agent = SampleAgent(tracker)
 
+    host = "https://shop.example.com"
+
+    # 26 HTTPX-visible samples (one per parser-derivable event type).
     samples = [
-        ("GET", "https://shop.example.com/.well-known/ucp", 200, None),
+        ("GET", f"{host}/.well-known/ucp", 200, None),
+        # Checkout (6)
         (
-            "POST", "https://shop.example.com/checkout-sessions", 201,
-            {
-                "id": "chk_abc",
-                "currency": "USD",
-                "totals": [{"type": "subtotal", "amount": 2999}],
-            },
+            "POST", f"{host}/checkout-sessions", 201,
+            {"id": "chk_abc", "currency": "USD",
+             "totals": [{"type": "subtotal", "amount": 2999}]},
+        ),
+        ("GET", f"{host}/checkout-sessions/chk_abc", 200, {"id": "chk_abc"}),
+        (
+            "PUT", f"{host}/checkout-sessions/chk_abc", 200,
+            {"id": "chk_abc", "status": "active"},
         ),
         (
-            "POST", "https://shop.example.com/checkout-sessions/chk_abc/complete",
-            200,
-            {
-                "id": "chk_abc",
-                "currency": "USD",
-                "totals": [
-                    {"type": "subtotal", "amount": 2999},
-                    {"type": "tax", "amount": 250},
-                    {"type": "total", "amount": 3249},
-                ],
-            },
+            "POST", f"{host}/checkout-sessions/chk_abc/complete", 200,
+            {"id": "chk_abc", "currency": "USD",
+             "totals": [
+                 {"type": "subtotal", "amount": 2999},
+                 {"type": "tax", "amount": 250},
+                 {"type": "total", "amount": 3249},
+             ]},
         ),
         (
-            "POST", "https://shop.example.com/orders", 201,
+            "POST", f"{host}/checkout-sessions/chk_abc/cancel", 200,
+            {"id": "chk_abc"},
+        ),
+        (
+            "PUT", f"{host}/checkout-sessions/chk_esc", 200,
+            {"id": "chk_esc", "status": "requires_escalation"},
+        ),
+        # Cart (4)
+        ("POST", f"{host}/carts", 201, {"id": "cart_1"}),
+        ("GET", f"{host}/carts/cart_1", 200, {"id": "cart_1"}),
+        ("PUT", f"{host}/carts/cart_1", 200, {"id": "cart_1"}),
+        ("POST", f"{host}/carts/cart_1/cancel", 200, {"id": "cart_1"}),
+        # Catalog (3)
+        ("GET", f"{host}/catalog/search?q=roses", 200, None),
+        ("POST", f"{host}/catalog/lookup", 200, None),
+        ("GET", f"{host}/catalog/product/sku_1", 200, None),
+        # Order (8) — webhook + 4 lifecycle from fulfillment.events[]
+        (
+            "POST", f"{host}/orders", 201,
             {"id": "order_xyz", "checkout_id": "chk_abc", "currency": "USD"},
         ),
+        ("GET", f"{host}/orders/order_xyz", 200, {"id": "order_xyz"}),
+        ("PUT", f"{host}/orders/order_xyz", 200, {"id": "order_xyz"}),
         (
-            "GET", "https://shop.example.com/orders/order_xyz", 404,
-            {"messages": [{"type": "error", "code": "not_found"}]},
+            "GET", f"{host}/orders/order_xyz", 200,
+            {"id": "order_xyz",
+             "fulfillment": {"events": [{"type": "shipped"}]}},
         ),
+        (
+            "GET", f"{host}/orders/order_xyz", 200,
+            {"id": "order_xyz",
+             "fulfillment": {"events": [
+                 {"type": "shipped"}, {"type": "delivered"},
+             ]}},
+        ),
+        (
+            "GET", f"{host}/orders/order_xyz", 200,
+            {"id": "order_xyz",
+             "adjustments": [{"type": "refund"}]},
+        ),
+        (
+            "GET", f"{host}/orders/order_xyz", 200,
+            {"id": "order_xyz", "status": "canceled"},
+        ),
+        (
+            "POST", f"{host}/webhooks/orders", 200,
+            {"id": "order_xyz"},  # generic receipt — no lifecycle in body
+        ),
+        # Identity linking (3) — initiated via discovery, completed via
+        # callback, revoked via DELETE.
+        ("GET", f"{host}/.well-known/oauth-authorization-server", 200, None),
+        ("POST", f"{host}/identity/callback", 200, None),
+        ("DELETE", f"{host}/identity/link/abc", 204, None),
+        # Fallback (2). `error` and `request` only fire when the path
+        # passes ``is_ucp_path`` but no specific branch matches.
+        # Most UCP branches catch their paths regardless of method, so
+        # we use unhandled (method, path) combinations to fall through:
+        #   - PATCH /carts/cart_1 — carts branch only handles
+        #     POST/PUT/GET/cancel; PATCH falls past it.
+        #   - OPTIONS /catalog/info — catalog branch only handles
+        #     /catalog/{search,lookup,product}; /catalog/info matches
+        #     the UCP hint but no specific branch.
+        ("PATCH", f"{host}/carts/cart_1", 500, None),  # → error
+        ("OPTIONS", f"{host}/catalog/info", 200, None),  # → request
     ]
     for method, url, status, body in samples:
         request = httpx.Request(method, url)
         response = httpx.Response(status_code=status, request=request, json=body)
-        from datetime import timedelta
         response._elapsed = timedelta(milliseconds=42)
         await tracker.record(response)
 
-    print(f"\n# {len(writer.rows)} rows recorded", flush=True)
+    # 5 agent-decision events (the remaining types). Note: the spec
+    # has 32 types total; the parser owns 26, the agent owns 6, but
+    # one of those — ``order_webhook_received`` — is already firable
+    # from inbound HTTPX traffic above. SampleAgent.webhook_received
+    # is the entry point for server-side handlers; we exercise it
+    # here for parity but it overlaps with the webhook sample row.
+    await agent.capability_negotiated(merchant_host="shop.example.com")
+    await agent.payment_handler_negotiated(checkout_session_id="chk_abc")
+    await agent.payment_instrument_selected(checkout_session_id="chk_abc")
+    await agent.payment_completed(
+        checkout_session_id="chk_abc",
+        order_id="order_xyz",
+        currency="USD",
+        total_amount=3249,
+    )
+    await agent.payment_failed(
+        checkout_session_id="chk_fail",
+        error_code="card_declined",
+    )
+    await agent.webhook_received(order_id="order_xyz")
+
+    # Coverage check — every spec type must show up at least once.
+    seen = {r["event_type"] for r in writer.rows}
+    expected = set(ALL_UCP_EVENT_TYPES)
+    missing = expected - seen
+    extra = seen - expected
+    print(f"\n# {len(writer.rows)} rows recorded; "
+          f"{len(seen)}/{len(expected)} distinct event types", flush=True)
+    if missing:
+        raise SystemExit(f"missing event types: {sorted(missing)}")
+    if extra:
+        # Don't fail — extras are fine (forward compatible) but worth
+        # noting in case a typo introduced a stray type.
+        print(f"# note: extra event types not in spec list: {sorted(extra)}",
+              flush=True)
 
 
 if __name__ == "__main__":  # pragma: no cover
