@@ -11,9 +11,11 @@ under 1000 SLOC). Read it, copy it into your project, and edit the
 schema / classification rules to fit your workload. Licensed
 [Apache 2.0](../LICENSE), Copyright 2026 Google LLC.
 
-Covers all 32 event types in the UCP spec — 26 derived from HTTPX
-traffic by the parser, 6 emitted explicitly by your agent loop via
-the included `SampleAgent` shape.
+Covers all 32 event types in the UCP spec: 27 derivable from HTTPX
+traffic by the parser; 6 emitted by your agent loop via the included
+`SampleAgent` shape; `order_webhook_received` overlaps both surfaces
+(parser sees inbound POSTs; agent is the entry point for
+server-side webhook handlers). 27 + 6 − 1 = 32.
 
 ## Install
 
@@ -134,14 +136,18 @@ Schema is 13 columns, defined as a list of tuples at the top of
 
 ### Event coverage
 
-The 26 parser-derived event types fire from HTTPX responses (path +
-method + status + body). The 6 agent-emitted types fire from
-`SampleAgent` (or your own `tracker.record_event` calls):
+The parser derives 27 event types from HTTPX responses (path +
+method + status + body); `SampleAgent` (or your own
+`tracker.record_event` calls) emits the other 5 plus an overlap on
+`order_webhook_received`:
 
 | Source | Events |
 |---|---|
-| HTTPX parser (26) | `profile_discovered`, `checkout_session_{created,get,updated,completed,canceled}`, `checkout_escalation`, `cart_{created,get,updated,canceled}`, `catalog_{search,lookup,product_get}`, `order_{created,get,updated,shipped,delivered,returned,canceled,webhook_received}`, `identity_link_{initiated,completed,revoked}`, `error`, `request` |
-| `SampleAgent` (6) | `capability_negotiated`, `payment_handler_negotiated`, `payment_instrument_selected`, `payment_completed`, `payment_failed`, `order_webhook_received` (overlaps with parser; use whichever path your handler runs in) |
+| HTTPX parser (27) | `profile_discovered`, `checkout_session_{created,get,updated,completed,canceled}`, `checkout_escalation`, `cart_{created,get,updated,canceled}`, `catalog_{search,lookup,product_get}`, `order_{created,get,updated,shipped,delivered,returned,canceled,webhook_received}`, `identity_link_{initiated,completed,revoked}`, `error`, `request` |
+| `SampleAgent` (5 unique + 1 overlap) | `capability_negotiated`, `payment_handler_negotiated`, `payment_instrument_selected`, `payment_completed`, `payment_failed`, **`order_webhook_received`** (overlaps with parser — use whichever path your handler runs in) |
+
+Total distinct: 32. The smoke test emits 33 rows (27 parser + 6
+agent) and asserts all 32 distinct types appear.
 
 ## What it doesn't do (fork for any of this)
 

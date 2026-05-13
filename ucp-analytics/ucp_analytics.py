@@ -30,9 +30,18 @@ Single-file reference implementation. Four moving parts:
        see (payment outcomes, capability negotiation, inbound
        webhook receipts).
 
-Together these cover all 32 event types in the UCP spec: 26 via the
-parser, 6 via the agent. Read the file end-to-end, then copy what
-you need into your own project and grow it from there.
+Together these cover all 32 event types in the UCP spec:
+
+  * 27 derivable from HTTPX traffic (the parser).
+  * 6 emitted from the agent loop (``SampleAgent``).
+  * 1 overlap (``order_webhook_received``) reachable from either
+    surface — the parser sees it on inbound HTTPX POSTs to
+    ``/webhook(s)/...``; the agent's ``webhook_received`` method is
+    the entry point when your server-side handler is the one
+    receiving the webhook.
+
+So: 27 + 6 - 1 = 32. Read the file end-to-end, then copy what you
+need into your own project and grow it from there.
 
 Anything fancy from a full framework (FastAPI middleware, Google ADK
 plugin, MCP/A2A JSON-RPC transports, HTTP message signing parsing,
@@ -263,11 +272,15 @@ def classify(
     Standard-Webhooks-header-aware for inbound webhook delivery); copy
     this function out and grow it as needed.
 
-    Coverage: 26 of the 32 UCP spec event types. The other 6 fire at
-    agent decision moments (payment outcomes, capability negotiation,
-    inbound webhook receipt outside this client's view) and need
-    explicit ``tracker.record_event`` calls — see ``SampleAgent``
-    below for the shape.
+    Coverage: 27 of the 32 UCP spec event types are derivable from
+    HTTPX traffic (the parser). The other 5 fire only at agent
+    decision moments (payment outcomes, capability negotiation,
+    payment handler / instrument selection) and need explicit
+    ``tracker.record_event`` calls — see ``SampleAgent`` below for
+    the shape. ``order_webhook_received`` is reachable from both
+    surfaces (parser sees outbound POSTs to ``/webhook(s)``;
+    ``SampleAgent.webhook_received`` is the entry point for
+    server-side handlers).
     """
     m = method.upper()
     p = path.rstrip("/")
@@ -346,17 +359,29 @@ def classify(
     return "request"
 
 
-def extract_fields(body: Optional[Any]) -> dict:
+def extract_fields(
+    body: Optional[Any], event_type: Optional[str] = None,
+) -> dict:
     """Pull a tiny set of analytics fields out of a UCP JSON body.
 
     Returns a dict of UCPEvent kwargs (empty if nothing matched). The
     extractor only knows about the few shapes that map cleanly to the
     fixed schema above; everything else is dropped on the floor.
 
-    Heuristic for distinguishing checkouts from orders: order bodies
-    carry ``checkout_id`` pointing back at their parent session, while
-    checkout bodies do not. So ``{"id": "...", "checkout_id": "..."}``
-    is an order; ``{"id": "..."}`` is a checkout.
+    The ``event_type`` arg (set by ``UCPTracker.record``) routes
+    ``body["id"]`` to the right column:
+
+      * checkout_* events → ``checkout_session_id``
+      * order_*    events → ``order_id`` (plus ``checkout_session_id``
+        if ``checkout_id`` is present, since orders carry a backref
+        to their parent session)
+      * cart_* / catalog_* / identity_* / discovery / fallback → the
+        id is intentionally dropped; the schema has no cart_id /
+        product_id column and conflating them with checkout_session_id
+        corrupts session-level aggregation.
+
+    If ``event_type`` is omitted (legacy callers), falls back to the
+    older "checkout_id present → order, else checkout" heuristic.
     """
     if not isinstance(body, dict):
         return {}
@@ -364,11 +389,16 @@ def extract_fields(body: Optional[Any]) -> dict:
 
     raw_id = body.get("id")
     if isinstance(raw_id, str) and raw_id:
-        if "checkout_id" in body:
+        et = event_type or ""
+        if et.startswith("order_") or "checkout_id" in body:
             out["order_id"] = raw_id
-            out["checkout_session_id"] = body["checkout_id"]
-        else:
+            backref = body.get("checkout_id")
+            if isinstance(backref, str) and backref:
+                out["checkout_session_id"] = backref
+        elif et.startswith("checkout_") or not et:
             out["checkout_session_id"] = raw_id
+        # cart_*, catalog_*, identity_*, profile_discovered, error,
+        # request → no column for this id; dropping is intentional.
 
     currency = body.get("currency")
     if isinstance(currency, str) and currency:
@@ -456,10 +486,22 @@ class BQWriter:
         self._lock = asyncio.Lock()
         self._client: Optional["bigquery.Client"] = None
         self._table_ready = False
+        # Exposed so callers (e.g. e2e mode) can detect that the final
+        # flush didn't drain the buffer or that an insert raised.
+        # ``last_flush_error`` is cleared on every successful flush; set
+        # to the most recent exception otherwise.
+        self.last_flush_error: Optional[BaseException] = None
 
     @property
     def full_table_id(self) -> str:
         return f"{self.project_id}.{self.dataset_id}.{self.table_id}"
+
+    @property
+    def buffered_count(self) -> int:
+        """How many rows are still waiting in the in-memory buffer.
+        After ``close()``, a non-zero value means the final flush could
+        not drain — typically a persistent BigQuery error."""
+        return len(self._buffer)
 
     # ---- public API ----
 
@@ -542,6 +584,7 @@ class BQWriter:
 
     async def _flush_locked(self) -> None:
         if not self._buffer:
+            self.last_flush_error = None
             return
         batch = self._buffer
         self._buffer = []
@@ -551,9 +594,16 @@ class BQWriter:
             logger.exception("flush raised; requeueing whole batch: %s", exc)
             # Re-queue at the front, then re-cap to max_buffer_size.
             self._buffer = (batch + self._buffer)[-self.max_buffer_size:]
+            self.last_flush_error = exc
             return
         if failed:
             self._buffer = (failed + self._buffer)[-self.max_buffer_size:]
+            # Partial row-level rejections aren't a flush failure per se
+            # — the call succeeded; just some rows were bad. Leave
+            # ``last_flush_error`` cleared so callers don't conflate.
+            self.last_flush_error = None
+        else:
+            self.last_flush_error = None
 
 
 # ---------------------------------------------------------------------------
@@ -600,16 +650,17 @@ class UCPTracker:
         if elapsed is not None:
             latency_ms = round(elapsed.total_seconds() * 1000, 2)
 
+        event_type = classify(
+            request.method, path, response.status_code, body,
+        )
         event = UCPEvent(
-            event_type=classify(
-                request.method, path, response.status_code, body,
-            ),
+            event_type=event_type,
             http_method=request.method.upper(),
             http_path=path,
             http_status_code=response.status_code,
             merchant_host=request.url.host or None,
             latency_ms=latency_ms,
-            **extract_fields(body),
+            **extract_fields(body, event_type),
         )
         await self.writer.enqueue(event.to_bq_row())
 
@@ -867,7 +918,9 @@ async def _smoke_test(
 
     host = f"https://{merchant_tag}"
 
-    # 26 HTTPX-visible samples (one per parser-derivable event type).
+    # 27 HTTPX-visible samples (one per parser-derivable event type,
+    # including ``order_webhook_received`` from inbound /webhook(s)
+    # traffic; the agent emits its own copy below for parity).
     samples = [
         ("GET", f"{host}/.well-known/ucp", 200, None),
         # Checkout (6)
@@ -962,12 +1015,14 @@ async def _smoke_test(
         response._elapsed = timedelta(milliseconds=42)
         await tracker.record(response)
 
-    # 5 agent-decision events (the remaining types). Note: the spec
-    # has 32 types total; the parser owns 26, the agent owns 6, but
-    # one of those — ``order_webhook_received`` — is already firable
-    # from inbound HTTPX traffic above. SampleAgent.webhook_received
-    # is the entry point for server-side handlers; we exercise it
-    # here for parity but it overlaps with the webhook sample row.
+    # 6 SampleAgent calls (5 agent-only event types + 1 overlap).
+    # The spec has 32 types total: 27 are parser-derivable from
+    # HTTPX traffic above; 5 fire only inside the agent loop
+    # (capability_negotiated, payment_handler_negotiated,
+    # payment_instrument_selected, payment_completed, payment_failed).
+    # ``order_webhook_received`` is the overlap — already emitted by
+    # the parser from /webhooks/orders above, and exercised again
+    # here because real server-side handlers go through SampleAgent.
     await agent.capability_negotiated(merchant_host=merchant_tag)
     await agent.payment_handler_negotiated(
         checkout_session_id="chk_abc", merchant_host=merchant_tag,
@@ -1059,6 +1114,23 @@ async def _run_e2e(
         await _smoke_test(tee, merchant_tag=merchant_tag)
     finally:
         await writer.close()  # drain + flush whatever's buffered
+
+    # Refuse to report success if the final flush couldn't drain. The
+    # tee writer only counts rows that were *handed to* BQWriter, not
+    # rows BigQuery actually accepted; without this check, a bad
+    # project / missing IAM / network failure would silently print
+    # "32/32 distinct event types" while zero rows landed.
+    if writer.buffered_count > 0:
+        err = writer.last_flush_error
+        err_msg = (
+            f" (last flush error: {type(err).__name__}: {err})"
+            if err is not None else ""
+        )
+        raise SystemExit(
+            f"flush failed: {writer.buffered_count} of {tee.row_count} rows "
+            f"still buffered after close — BigQuery did not accept them"
+            f"{err_msg}"
+        )
 
     _check_coverage(tee.seen_types, tee.row_count)
 
