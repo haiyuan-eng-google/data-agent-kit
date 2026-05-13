@@ -10,10 +10,12 @@
 ## Overview
 
 UCP defines the protocol for agentic commerce — but ships no observability.
-This package automatically captures checkout sessions, order lifecycle,
+This module automatically captures checkout sessions, order lifecycle,
 payment flows, capability negotiation, and identity linking events into
 BigQuery for funnel analysis, error debugging, latency monitoring, and
-revenue attribution.
+revenue attribution. It ships as part of the
+[Data Agent Kit](https://github.com/haiyuan-eng-google/data-agent-kit) monorepo
+under `ucp-analytics/`.
 
 Three integration points — pick any or combine:
 
@@ -46,23 +48,28 @@ Three integration points — pick any or combine:
 
 ## Installation
 
+Install from source by cloning the Data Agent Kit repository and using the
+`ucp-analytics/` folder directly:
+
 ```bash
-# Core (tracker + HTTPX hook)
-pip install ucp-analytics
-
-# With FastAPI middleware
-pip install ucp-analytics[fastapi]
-
-# With Google ADK plugin adapter
-pip install ucp-analytics[adk]
+git clone https://github.com/haiyuan-eng-google/data-agent-kit.git
+cd data-agent-kit/ucp-analytics
 ```
 
-Or install from source:
+Then install via pip (editable so source edits take effect immediately):
 
 ```bash
-git clone https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics.git
-cd Universal-Commerce-Protocol-Analytics
-uv sync
+pip install -e .                  # Core (tracker + HTTPX hook)
+pip install -e ".[fastapi]"       # With FastAPI middleware
+pip install -e ".[adk]"           # With Google ADK plugin adapter
+pip install -e ".[fastapi,adk]"   # All extras
+```
+
+Or with [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv sync              # Core
+uv sync --all-extras # All extras
 ```
 
 ## Quick Start
@@ -87,7 +94,7 @@ async def shutdown():
 ```
 
 > **Note:** `UCPAnalyticsMiddleware` requires the `[fastapi]` extra.
-> The middleware is lazy-loaded so the core package works without starlette installed.
+> The middleware is lazy-loaded so the core module works without starlette installed.
 
 ### Agent / platform client (HTTPX)
 
@@ -240,10 +247,10 @@ BigQuery queries: checkout funnel, revenue by merchant, payment handler mix,
 capability adoption, error analysis, escalation rate, latency percentiles,
 fulfillment geography, session timeline, and discovery-to-checkout rate.
 
-## Repository Structure
+## Folder Structure
 
 ```
-Universal-Commerce-Protocol-Analytics/
+data-agent-kit/ucp-analytics/
 ├── src/ucp_analytics/
 │   ├── __init__.py                 # public API exports (lazy-loads middleware)
 │   ├── events.py                   # UCPEvent, UCPEventType, CheckoutStatus
@@ -286,5 +293,5 @@ for details.
 
 ## License
 
-UCP is an open-source project under the
-[Apache License 2.0](LICENSE).
+Distributed under the [Apache License 2.0](../LICENSE), inherited from the
+Data Agent Kit repository.

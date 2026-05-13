@@ -5,7 +5,7 @@
 **Version:** 0.2.0
 **Date:** May 11, 2026
 **Spec target:** UCP [`c5c6139`](https://github.com/Universal-Commerce-Protocol/ucp/commit/c5c6139) (2026-05-06)
-**Repository:** [haiyuan-eng-google/Universal-Commerce-Protocol-Analytics](https://github.com/haiyuan-eng-google/Universal-Commerce-Protocol-Analytics)
+**Repository:** [haiyuan-eng-google/data-agent-kit](https://github.com/haiyuan-eng-google/data-agent-kit) — `ucp-analytics/`
 
 ---
 
@@ -118,9 +118,9 @@ Platform (Agent)                    Business (Merchant)
 
 ### 3.4 Lazy Loading and Optional Dependencies
 
-The core package depends only on `google-cloud-bigquery` and `httpx`. Optional integrations are lazy-loaded to avoid import errors:
+The core module depends only on `google-cloud-bigquery` and `httpx`. Optional integrations are lazy-loaded to avoid import errors:
 
-- **FastAPI middleware:** `UCPAnalyticsMiddleware` is exposed via `__getattr__` in `__init__.py` and only imported when accessed, so the core package works without `starlette` installed.
+- **FastAPI middleware:** `UCPAnalyticsMiddleware` is exposed via `__getattr__` in `__init__.py` and only imported when accessed, so the core code works without `starlette` installed.
 - **ADK plugin:** `adk_plugin.py` uses `try/except ImportError` around `google.adk` imports, falling back to `object` as the base class when ADK is not installed.
 
 ---
@@ -495,7 +495,7 @@ On first write, the writer lazily initializes the BigQuery client, creates datas
 
 Analytics recording is fire-and-forget: the middleware dispatches `tracker.record_http()` via `asyncio.create_task()` so it does not block the HTTP response. Each task is registered on the tracker via `tracker.register_pending_task()`, allowing `tracker.close()` to drain all in-flight tasks before flushing the buffer. This means the shutdown pattern is simply `await tracker.close()` — no need to reference the middleware instance (which is constructed internally by `app.add_middleware()` and not directly accessible). Response headers (including multi-value headers like `set-cookie`) are preserved using raw header passthrough.
 
-The middleware is lazy-loaded in `__init__.py` via `__getattr__`, so importing the core package does not require `starlette` to be installed.
+The middleware is lazy-loaded in `__init__.py` via `__getattr__`, so importing the core module does not require `starlette` to be installed.
 
 ### 8.2 HTTPX Event Hook (Agent Client)
 
@@ -587,7 +587,7 @@ The underlying `AsyncBigQueryWriter` also accepts:
 
 | Dimension | BQ Agent Analytics (ADK) | UCP Analytics (this) |
 |---|---|---|
-| Lives in | `google/adk-python` | `haiyuan-eng-google/Universal-Commerce-Protocol-Analytics` |
+| Lives in | `google/adk-python` | `haiyuan-eng-google/data-agent-kit/ucp-analytics/` |
 | Hooks into | ADK Runner callbacks | HTTP layer (FastAPI/HTTPX) |
 | Understands | Generic agent/tool/model events | UCP checkout, order, payment, capabilities |
 | Schema | Flat event rows | Commerce-aware (totals, line items, fulfillment) |

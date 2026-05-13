@@ -4,6 +4,20 @@ This directory contains runnable examples that demonstrate UCP Analytics
 covering every UCP event type across checkout, cart, order, identity,
 payment, and transport scenarios.
 
+## Getting the source
+
+These examples live inside the
+[Data Agent Kit](https://github.com/haiyuan-eng-google/data-agent-kit)
+repository under `ucp-analytics/`. Clone and enter that folder before
+running any of the snippets below:
+
+```bash
+git clone https://github.com/haiyuan-eng-google/data-agent-kit.git
+cd data-agent-kit/ucp-analytics
+```
+
+All paths in this README are relative to `data-agent-kit/ucp-analytics/`.
+
 ## Overview
 
 | Example | BigQuery? | Transport | Event Types Covered |
