@@ -6,9 +6,10 @@ A single-file reference for capturing
 into a partitioned, clustered BigQuery table.
 
 This is a **sample**, not a framework. The whole adapter is
-`ucp_analytics.py` (~950 lines, under 1k). Read it, copy it into
-your project, and edit the schema / classification rules to fit
-your workload.
+`ucp_analytics.py` (~1200 lines including docstrings + smoke test;
+under 1000 SLOC). Read it, copy it into your project, and edit the
+schema / classification rules to fit your workload. Licensed
+[Apache 2.0](../LICENSE), Copyright 2026 Google LLC.
 
 Covers all 32 event types in the UCP spec — 26 derived from HTTPX
 traffic by the parser, 6 emitted explicitly by your agent loop via
@@ -83,6 +84,38 @@ Drives 33 synthetic events through the full pipeline (parser +
 agent), prints each row as a JSON line, and asserts that every one
 of the 32 UCP event types appears at least once. Exits non-zero if
 coverage regresses.
+
+## End-to-end against real BigQuery
+
+```bash
+# Auth once (uses Application Default Credentials).
+gcloud auth application-default login
+
+# Stream the same 33 rows into BigQuery and verify they're queryable.
+python ucp_analytics.py \
+    --e2e \
+    --project-id YOUR_GCP_PROJECT \
+    --verify
+
+# Or without --verify if you just want to write and not wait:
+python ucp_analytics.py --e2e --project-id YOUR_GCP_PROJECT
+```
+
+What `--e2e` does:
+
+1. Generates a unique `merchant_host` tag (`smoke-{uuid}.example.com`)
+   so this run's rows are filterable in the table.
+2. Auto-creates the dataset (default `ucp_analytics_e2e`) and table
+   (default `ucp_events_smoke`) on first run, partitioned by
+   `timestamp` and clustered by `(event_type, checkout_session_id)`.
+3. Streams all 33 rows through `BQWriter` and drains the buffer.
+4. With `--verify`, polls the table with backoff (up to
+   `--verify-timeout` seconds, default 90) until every row from this
+   run is queryable, then prints `verify ok`.
+
+The auto-created table is the same schema (13 columns) the live
+`BQWriter` writes to in your own integration. Drop the dataset when
+you're done — it's tagged `_e2e` for that reason.
 
 ## What it does
 
