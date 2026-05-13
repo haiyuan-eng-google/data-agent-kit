@@ -107,7 +107,7 @@ If you are building your own agents or using an interface that supports raw MCP 
 For developers building production agents (e.g., using ADK or LangGraph), we provide opinionated guidance on making your agents observable, safe, and measurable.
 * **[Agent Analytics](./agent-analytics/README.md):** Track usage and performance of agents using BigQuery.
 * **[Agent Evaluation](./agent-evaluation/README.md):** Benchmark and test your agents using EvalBench.
-* **[UCP Analytics](./ucp-analytics/README.md):** BigQuery commerce observability for the [Universal Commerce Protocol](https://ucp.dev) — captures every checkout, cart, catalog, order, payment, identity, AP2 mandate, and webhook event into a partitioned, clustered BigQuery table. Ships as a Python package with FastAPI middleware, an HTTPX client hook, and an optional Google ADK plugin, all sharing the same `UCPAnalyticsTracker` → `AsyncBigQueryWriter` pipeline.
+* **[UCP Analytics](./ucp-analytics/README.md):** Single-file sample implementation that parses [Universal Commerce Protocol](https://ucp.dev) traffic from an `httpx` event hook and streams events into a partitioned, clustered BigQuery table. Covers all 32 UCP spec event types (27 from the parser, 6 from the included `SampleAgent`, one overlap) and ships an `--e2e` mode that round-trips against a real BigQuery dataset. Under 1000 SLOC; copy into your project and grow the classifier / schema as needed.
 
 ---
 
