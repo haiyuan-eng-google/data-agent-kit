@@ -15,7 +15,7 @@
 """ucp_analytics — sample HTTPX → BigQuery commerce-observability adapter
 for the Universal Commerce Protocol (UCP).
 
-Single-file reference implementation. Four moving parts:
+Sample reference implementation. Three moving parts in this file:
 
     1. ``classify(...)`` and ``extract_fields(...)`` — pure functions
        that turn an HTTP method/path/body into a UCPEvent.
@@ -25,12 +25,13 @@ Single-file reference implementation. Four moving parts:
        an httpx response event hook (via ``make_event_hook``);
        ``.record_event(event)`` is the manual entry point for events
        that don't pass through HTTPX traffic.
-    4. ``SampleAgent`` — reference shape for a UCP shopping agent
-       showing where to emit the analytics events the parser can't
-       see (payment outcomes, capability negotiation, inbound
-       webhook receipts).
 
-Together these cover all 32 event types in the UCP spec:
+A sibling file ``sample_agent.py`` provides ``SampleAgent``, a
+reference shape for a UCP shopping agent that emits the events the
+parser cannot see (payment outcomes, capability negotiation,
+server-side webhook receipts).
+
+Together they cover all 32 event types in the UCP spec:
 
   * 27 derivable from HTTPX traffic (the parser).
   * 6 emitted from the agent loop (``SampleAgent``).
@@ -40,8 +41,8 @@ Together these cover all 32 event types in the UCP spec:
     the entry point when your server-side handler is the one
     receiving the webhook.
 
-So: 27 + 6 - 1 = 32. Read the file end-to-end, then copy what you
-need into your own project and grow it from there.
+So: 27 + 6 - 1 = 32. Read both files end-to-end, then copy what
+you need into your own project and grow it from there.
 
 Anything fancy from a full framework (FastAPI middleware, Google ADK
 plugin, MCP/A2A JSON-RPC transports, HTTP message signing parsing,
@@ -49,43 +50,8 @@ AP2 mandates, authorization signals, embedded checkout config,
 RFC 7235 Bearer challenge parsing, PII redaction) is intentionally
 out of scope. Fork the file when you need any of that.
 
-Usage:
-
-    import httpx
-    from ucp_analytics import (
-        BQWriter, UCPTracker, SampleAgent, make_event_hook,
-    )
-
-    writer = BQWriter(
-        project_id="my-gcp-project",
-        dataset_id="ucp_analytics",
-        table_id="ucp_events",
-    )
-    tracker = UCPTracker(writer)
-    agent = SampleAgent(tracker)
-
-    async with httpx.AsyncClient(
-        event_hooks={"response": [make_event_hook(tracker)]},
-    ) as c:
-        # HTTPX traffic — parser derives 27 event types.
-        await c.post(
-            "https://merchant.example.com/checkout-sessions",
-            json={"line_items": [...]},
-        )
-
-    # Agent-decision moments — 6 SampleAgent calls (5 unique types
-    # plus an overlap on order_webhook_received with the parser).
-    await agent.payment_completed(
-        checkout_session_id="chk_abc", currency="USD", total_amount=3249,
-    )
-
-    await writer.close()  # drain the buffer and close the BQ client
-
-The standalone smoke test lives in the sibling file ``smoke_test.py``
-(``python smoke_test.py`` for stdout, ``--e2e --project-id PID`` for
-real BigQuery). It's a regression check, not part of the sample
-itself — when you copy this file into your own project, you do not
-need to copy ``smoke_test.py``.
+A runnable quickstart lives in the sibling file ``quickstart.py``;
+the regression smoke test lives in ``smoke_test.py``.
 """
 
 from __future__ import annotations
@@ -272,8 +238,9 @@ def classify(
     HTTPX traffic (the parser). The other 5 fire only at agent
     decision moments (payment outcomes, capability negotiation,
     payment handler / instrument selection) and need explicit
-    ``tracker.record_event`` calls — see ``SampleAgent`` below for
-    the shape. ``order_webhook_received`` is reachable from both
+    ``tracker.record_event`` calls — see ``SampleAgent`` in
+    ``sample_agent.py`` for the shape. ``order_webhook_received``
+    is reachable from both
     surfaces (parser sees outbound POSTs to ``/webhook(s)``;
     ``SampleAgent.webhook_received`` is the entry point for
     server-side handlers).
@@ -615,8 +582,8 @@ class UCPTracker:
         Parses method/path/body, classifies, extracts fields, enqueues.
       * ``record_event(event)`` — for events that don't pass through
         HTTPX (agent decision moments, server-side webhook receipts,
-        out-of-band lifecycle pings). ``SampleAgent`` below shows the
-        common cases.
+        out-of-band lifecycle pings). ``SampleAgent`` in
+        ``sample_agent.py`` shows the common cases.
     """
 
     def __init__(self, writer: BQWriter) -> None:
@@ -675,121 +642,6 @@ class UCPTracker:
         handler, lifecycle pings from out-of-band sources.
         """
         await self.writer.enqueue(event.to_bq_row())
-
-
-# ---------------------------------------------------------------------------
-# SampleAgent — where the parser stops and your agent code starts
-# ---------------------------------------------------------------------------
-
-class SampleAgent:
-    """Reference shape for a UCP shopping agent's analytics emission.
-
-    HTTPX hooks capture wire traffic; they can't see decisions the
-    agent makes between requests. These six methods are the spots in
-    a real agent loop where you'd call ``tracker.record_event`` to
-    cover the rest of the spec:
-
-      * ``capability_negotiated`` — after parsing ``/.well-known/ucp``
-        and picking which UCP feature set to use for this merchant.
-      * ``payment_handler_negotiated`` — after the agent selects a
-        payment handler (AP2 / network token / wallet) for the
-        session.
-      * ``payment_instrument_selected`` — when the user picks a card
-        / wallet / saved instrument.
-      * ``payment_completed`` / ``payment_failed`` — terminal payment
-        outcomes the merchant returned (often piggybacked on
-        checkout_session_completed, but worth emitting separately so
-        payment dashboards don't have to dig into checkout bodies).
-      * ``webhook_received`` — inbound webhook your server-side
-        handler accepted (the HTTPX-side parser only sees outbound
-        traffic; webhook delivery is inbound).
-
-    Copy or subclass; nothing here is load-bearing beyond the
-    ``record_event`` call.
-    """
-
-    def __init__(self, tracker: UCPTracker) -> None:
-        self.tracker = tracker
-
-    async def capability_negotiated(
-        self,
-        *,
-        merchant_host: Optional[str] = None,
-        checkout_session_id: Optional[str] = None,
-    ) -> None:
-        await self.tracker.record_event(UCPEvent(
-            event_type="capability_negotiated",
-            merchant_host=merchant_host,
-            checkout_session_id=checkout_session_id,
-        ))
-
-    async def payment_handler_negotiated(
-        self,
-        *,
-        checkout_session_id: Optional[str] = None,
-        merchant_host: Optional[str] = None,
-    ) -> None:
-        await self.tracker.record_event(UCPEvent(
-            event_type="payment_handler_negotiated",
-            checkout_session_id=checkout_session_id,
-            merchant_host=merchant_host,
-        ))
-
-    async def payment_instrument_selected(
-        self,
-        *,
-        checkout_session_id: Optional[str] = None,
-        merchant_host: Optional[str] = None,
-    ) -> None:
-        await self.tracker.record_event(UCPEvent(
-            event_type="payment_instrument_selected",
-            checkout_session_id=checkout_session_id,
-            merchant_host=merchant_host,
-        ))
-
-    async def payment_completed(
-        self,
-        *,
-        checkout_session_id: Optional[str] = None,
-        order_id: Optional[str] = None,
-        currency: Optional[str] = None,
-        total_amount: Optional[int] = None,
-        merchant_host: Optional[str] = None,
-    ) -> None:
-        await self.tracker.record_event(UCPEvent(
-            event_type="payment_completed",
-            checkout_session_id=checkout_session_id,
-            order_id=order_id,
-            currency=currency,
-            total_amount=total_amount,
-            merchant_host=merchant_host,
-        ))
-
-    async def payment_failed(
-        self,
-        *,
-        checkout_session_id: Optional[str] = None,
-        merchant_host: Optional[str] = None,
-        error_code: Optional[str] = None,
-    ) -> None:
-        await self.tracker.record_event(UCPEvent(
-            event_type="payment_failed",
-            checkout_session_id=checkout_session_id,
-            merchant_host=merchant_host,
-            error_code=error_code,
-        ))
-
-    async def webhook_received(
-        self,
-        *,
-        order_id: Optional[str] = None,
-        merchant_host: Optional[str] = None,
-    ) -> None:
-        await self.tracker.record_event(UCPEvent(
-            event_type="order_webhook_received",
-            order_id=order_id,
-            merchant_host=merchant_host,
-        ))
 
 
 def make_event_hook(tracker: UCPTracker):
