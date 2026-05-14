@@ -79,6 +79,32 @@ asyncio.run(main())
 Every UCP request through that client produces one BigQuery row; so
 does every `SampleAgent` call.
 
+## Quickstart
+
+The canonical runnable sample is `quickstart.py`. It follows the
+[Google Cloud Samples Style Guide](https://googlecloudplatform.github.io/samples-style-guide/)
+(region tags, minimal positional argument, ADC auth, AAA layout,
+no multi-mode CLI):
+
+```bash
+# 1. Auth (uses Application Default Credentials).
+gcloud auth application-default login
+
+# 2. Run the quickstart against your project.
+python quickstart.py YOUR_GCP_PROJECT
+
+# Optional dataset / table overrides:
+python quickstart.py YOUR_GCP_PROJECT \
+    --dataset_id ucp_analytics \
+    --table_id ucp_events
+```
+
+The sample uses `httpx.MockTransport` to stand in for a real UCP
+merchant so it is runnable without an external HTTP dependency.
+Drop the mock and point `base_url` at the merchant you want to
+instrument in your own code. The region tag covering the whole
+sample is `ucp_analytics_quickstart`.
+
 ## Smoke test (no GCP credentials needed)
 
 ```bash
@@ -92,7 +118,9 @@ coverage regresses.
 
 The smoke test lives in `smoke_test.py` (sibling file) and imports
 the public surface of `ucp_analytics.py`. It is a regression check
-on the sample, not part of the sample itself.
+on the sample (and therefore deliberately not style-guide-shaped —
+it has a multi-mode CLI on purpose for testing). The style-guide
+sample is `quickstart.py`.
 
 ## End-to-end against real BigQuery
 
