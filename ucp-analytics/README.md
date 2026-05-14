@@ -93,8 +93,8 @@ python quickstart.py YOUR_GCP_PROJECT
 
 # Optional dataset / table overrides:
 python quickstart.py YOUR_GCP_PROJECT \
-    --dataset_id ucp_analytics \
-    --table_id ucp_events
+    --dataset-id ucp_analytics \
+    --table-id ucp_events
 ```
 
 The sample uses `httpx.MockTransport` to stand in for a real UCP

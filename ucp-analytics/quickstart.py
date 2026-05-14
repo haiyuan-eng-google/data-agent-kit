@@ -15,9 +15,9 @@
 """Quickstart: stream Universal Commerce Protocol (UCP) HTTP traffic
 into a partitioned, clustered BigQuery table.
 
-Attaches a ``UCPTracker`` to an ``httpx`` async client via the
-response event-hook hook, fires two UCP requests against a mocked
-merchant, and drains the writer.
+Attaches a ``UCPTracker`` to an ``httpx`` async client as a response
+event hook, fires two UCP requests against a mocked merchant, and
+drains the writer.
 
 Before running this sample:
 
@@ -89,25 +89,28 @@ async def stream_events_to_bigquery(
     # The UCP tracker is wired in as a response event hook. Every
     # request the client makes through this context manager triggers
     # ``tracker.record``, which classifies the response and enqueues
-    # a row on the writer.
-    async with httpx.AsyncClient(
-        base_url="https://merchant.example.com",
-        transport=transport,
-        event_hooks={"response": [make_event_hook(tracker)]},
-    ) as client:
-        await client.get("/.well-known/ucp")
-        await client.post(
-            "/checkout-sessions",
-            json={
-                "line_items": [
-                    {"item": {"id": "roses"}, "quantity": 1},
-                ],
-            },
-        )
-
-    # Drain the buffer and release the BigQuery client. ``close``
-    # flushes any rows that haven't been committed yet.
-    await writer.close()
+    # a row on the writer. The outer ``try / finally`` guarantees the
+    # writer drains even if a request raises partway through, so any
+    # already-buffered rows still reach BigQuery.
+    try:
+        async with httpx.AsyncClient(
+            base_url="https://merchant.example.com",
+            transport=transport,
+            event_hooks={"response": [make_event_hook(tracker)]},
+        ) as client:
+            await client.get("/.well-known/ucp")
+            await client.post(
+                "/checkout-sessions",
+                json={
+                    "line_items": [
+                        {"item": {"id": "roses"}, "quantity": 1},
+                    ],
+                },
+            )
+    finally:
+        # Drain the buffer and release the BigQuery client. ``close``
+        # flushes any rows that haven't been committed yet.
+        await writer.close()
 
     # Assert.
     #
@@ -125,9 +128,11 @@ async def stream_events_to_bigquery(
 
 
 def _mock_merchant(request: httpx.Request) -> httpx.Response:
-    """Return a canned UCP response for the two paths the quickstart
-    hits. Not part of the sample surface — this exists only so the
-    quickstart is self-contained."""
+    """Return a canned UCP response for the paths the quickstart hits.
+
+    Not part of the sample surface — this exists only so the
+    quickstart is self-contained against zero network dependencies.
+    """
     if request.url.path == "/.well-known/ucp":
         return httpx.Response(200, json={"version": "1.0"})
     if (
@@ -154,12 +159,12 @@ if __name__ == "__main__":
         help="GCP project ID that owns the BigQuery dataset.",
     )
     parser.add_argument(
-        "--dataset_id",
+        "--dataset-id",
         default="ucp_analytics",
         help="BigQuery dataset; auto-created if missing.",
     )
     parser.add_argument(
-        "--table_id",
+        "--table-id",
         default="ucp_events",
         help="BigQuery table; auto-created if missing.",
     )
