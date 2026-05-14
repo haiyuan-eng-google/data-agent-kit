@@ -5,11 +5,11 @@ A single-file reference for capturing
 [httpx](https://www.python-httpx.org/) client and streaming events
 into a partitioned, clustered BigQuery table.
 
-This is a **sample**, not a framework. The whole adapter is one
-file, `ucp_analytics.py` (~800 lines including docstrings). A
-sibling `smoke_test.py` exercises every spec event end-to-end
-against either stdout or a real BigQuery table; copy `ucp_analytics.py`
-into your project, leave `smoke_test.py` here. Licensed
+This is a **sample**, not a framework. Two files make up the adapter
+you copy into your project — `ucp_analytics.py` (parser + writer +
+tracker) and `sample_agent.py` (reference shape for the agent-emitted
+event types). A sibling `quickstart.py` is the runnable demo and
+`smoke_test.py` is the spec-coverage regression check. Licensed
 [Apache 2.0](../LICENSE), Copyright 2026 Google LLC.
 
 Covers all 32 event types in the UCP spec: 27 derivable from HTTPX
@@ -23,84 +23,53 @@ server-side webhook handlers). 27 + 6 − 1 = 32.
 ```bash
 git clone https://github.com/GoogleCloudPlatform/data-agent-kit.git
 cd data-agent-kit/ucp-analytics
+```
 
-# Only two runtime deps; install them however your project does it.
+`quickstart.py` declares its runtime dependency inline via
+[PEP 723](https://peps.python.org/pep-0723/), so you can run it
+directly with [`uv`](https://docs.astral.sh/uv/) without any
+explicit install step:
+
+```bash
+uv run quickstart.py YOUR_GCP_PROJECT
+```
+
+With pip, install the two runtime deps once and run with
+`python`:
+
+```bash
 pip install httpx google-cloud-bigquery
-
-# Then drop ucp_analytics.py into your project, or run the smoke
-# test from here.
-python smoke_test.py
+python quickstart.py YOUR_GCP_PROJECT
 ```
 
-There is intentionally no `pyproject.toml` and no install step — this
-is a single file you read and copy, not a package you depend on.
-
-## Usage
-
-```python
-import asyncio
-import httpx
-from ucp_analytics import (
-    BQWriter, UCPTracker, SampleAgent, make_event_hook,
-)
-
-async def main():
-    writer = BQWriter(
-        project_id="my-gcp-project",
-        dataset_id="ucp_analytics",
-        table_id="ucp_events",
-    )
-    tracker = UCPTracker(writer)
-    agent = SampleAgent(tracker)
-
-    async with httpx.AsyncClient(
-        event_hooks={"response": [make_event_hook(tracker)]},
-    ) as client:
-        # HTTPX traffic — parser derives 27 event types.
-        await client.get("https://merchant.example.com/.well-known/ucp")
-        await client.post(
-            "https://merchant.example.com/checkout-sessions",
-            json={"line_items": [{"item": {"id": "roses"}, "quantity": 1}]},
-        )
-
-    # Agent-decision moments — 6 SampleAgent calls (5 unique types
-    # plus an overlap on order_webhook_received with the parser).
-    # These don't pass through HTTPX, so the parser can't see them.
-    await agent.capability_negotiated(merchant_host="merchant.example.com")
-    await agent.payment_completed(
-        checkout_session_id="chk_abc", currency="USD", total_amount=3249,
-    )
-
-    await writer.close()  # drain + close
-
-asyncio.run(main())
-```
-
-Every UCP request through that client produces one BigQuery row; so
-does every `SampleAgent` call.
+There is intentionally no `pyproject.toml` — these are sample files
+you read and copy, not a package you depend on.
 
 ## Quickstart
 
-The canonical runnable sample is `quickstart.py`. One positional
-argument, ADC auth, end-to-end against your own BigQuery dataset:
+The canonical runnable sample is [`quickstart.py`](./quickstart.py).
+One positional argument (`project_id`), ADC auth, end-to-end against
+your own BigQuery dataset:
 
 ```bash
 # 1. Auth (uses Application Default Credentials).
 gcloud auth application-default login
 
 # 2. Run the quickstart against your project.
-python quickstart.py YOUR_GCP_PROJECT
+uv run quickstart.py YOUR_GCP_PROJECT
 
 # Optional dataset / table overrides:
-python quickstart.py YOUR_GCP_PROJECT \
+uv run quickstart.py YOUR_GCP_PROJECT \
     --dataset-id ucp_analytics \
     --table-id ucp_events
 ```
 
-The sample uses `httpx.MockTransport` to stand in for a real UCP
-merchant so it is runnable without an external HTTP dependency.
-Drop the mock and point `base_url` at the merchant you want to
-instrument in your own code.
+The quickstart demonstrates the agent-emission pattern — three
+`SampleAgent` calls (`capability_negotiated`,
+`payment_handler_negotiated`, `payment_completed`) that each land
+one row in BigQuery. To capture HTTP traffic via the `httpx` hook
+instead, see `ucp_analytics.UCPTracker.record` and
+`make_event_hook` in `ucp_analytics.py`.
 
 ## Smoke test (no GCP credentials needed)
 
@@ -160,7 +129,7 @@ you're done — it's tagged `_e2e` for that reason.
 | Async buffered streaming insert into a partitioned, clustered table | `BQWriter` |
 | `httpx` response event hook gluing the parser to the writer | `UCPTracker.record` + `make_event_hook` |
 | Manual entry point for non-HTTPX events | `UCPTracker.record_event` |
-| Reference shape for an agent's analytics emission (payment, capability negotiation, webhook receipts) | `SampleAgent` |
+| Reference shape for an agent's analytics emission (payment, capability negotiation, webhook receipts) | `SampleAgent` (in `sample_agent.py`) |
 
 Schema is 13 columns, defined as a list of tuples at the top of
 `ucp_analytics.py`. Add columns there when your dashboards need them.

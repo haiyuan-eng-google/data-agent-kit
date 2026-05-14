@@ -47,7 +47,8 @@ from typing import Any, Tuple
 
 import httpx
 
-from ucp_analytics import BQWriter, SampleAgent, UCPTracker
+from sample_agent import SampleAgent
+from ucp_analytics import BQWriter, UCPTracker
 
 try:
     from google.cloud import bigquery
