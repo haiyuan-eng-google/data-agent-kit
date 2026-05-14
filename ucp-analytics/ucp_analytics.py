@@ -41,8 +41,8 @@ Together they cover all 32 event types in the UCP spec:
     the entry point when your server-side handler is the one
     receiving the webhook.
 
-So: 27 + 6 - 1 = 32. Read the file end-to-end, then copy what you
-need into your own project and grow it from there.
+So: 27 + 6 - 1 = 32. Read both files end-to-end, then copy what
+you need into your own project and grow it from there.
 
 Anything fancy from a full framework (FastAPI middleware, Google ADK
 plugin, MCP/A2A JSON-RPC transports, HTTP message signing parsing,

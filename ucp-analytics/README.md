@@ -83,9 +83,10 @@ of the 32 UCP event types appears at least once. Exits non-zero if
 coverage regresses.
 
 The smoke test lives in `smoke_test.py` (sibling file) and imports
-the public surface of `ucp_analytics.py`. It is a regression check
-on the sample — the multi-mode CLI exists for testing, not as a
-template to copy. The canonical sample is `quickstart.py`.
+the public surfaces of both `ucp_analytics.py` and
+`sample_agent.py`. It is a regression check on the sample — the
+multi-mode CLI exists for testing, not as a template to copy. The
+canonical sample is `quickstart.py`.
 
 ## End-to-end against real BigQuery
 

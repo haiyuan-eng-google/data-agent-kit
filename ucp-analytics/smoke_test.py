@@ -33,8 +33,8 @@ Run:
     python smoke_test.py
     python smoke_test.py --e2e --project-id YOUR_GCP_PROJECT --verify
 
-When you copy ``ucp_analytics.py`` into your own project, leave
-this file behind.
+When you copy ``ucp_analytics.py`` and ``sample_agent.py`` into
+your own project, leave this file behind.
 """
 
 from __future__ import annotations
