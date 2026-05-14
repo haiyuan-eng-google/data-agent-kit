@@ -12,7 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""smoke_test — standalone smoke test for ucp_analytics.py.
+"""smoke_test — regression test for ucp_analytics.py.
+
+This file is **not** a code sample. The canonical runnable sample
+is ``quickstart.py``. ``smoke_test.py`` has a multi-mode CLI and a
+synthetic event corpus because its job is to assert spec coverage
+on every push, which a single-purpose sample cannot do.
 
 Two modes, both driven by the same event generator:
 
@@ -28,10 +33,8 @@ Run:
     python smoke_test.py
     python smoke_test.py --e2e --project-id YOUR_GCP_PROJECT --verify
 
-This file is a smoke test for the sample, not part of the sample
-itself — when you copy ``ucp_analytics.py`` into your project, you
-do not need this file. Keep it here as a regression check and as a
-worked example of how every spec event type lands in the table.
+When you copy ``ucp_analytics.py`` into your own project, leave
+this file behind.
 """
 
 from __future__ import annotations
