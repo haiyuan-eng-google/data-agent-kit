@@ -5,10 +5,11 @@ A single-file reference for capturing
 [httpx](https://www.python-httpx.org/) client and streaming events
 into a partitioned, clustered BigQuery table.
 
-This is a **sample**, not a framework. The whole adapter is
-`ucp_analytics.py` (~1200 lines including docstrings + smoke test;
-under 1000 SLOC). Read it, copy it into your project, and edit the
-schema / classification rules to fit your workload. Licensed
+This is a **sample**, not a framework. The whole adapter is one
+file, `ucp_analytics.py` (~800 lines including docstrings). A
+sibling `smoke_test.py` exercises every spec event end-to-end
+against either stdout or a real BigQuery table; copy `ucp_analytics.py`
+into your project, leave `smoke_test.py` here. Licensed
 [Apache 2.0](../LICENSE), Copyright 2026 Google LLC.
 
 Covers all 32 event types in the UCP spec: 27 derivable from HTTPX
@@ -26,8 +27,9 @@ cd data-agent-kit/ucp-analytics
 # Only two runtime deps; install them however your project does it.
 pip install httpx google-cloud-bigquery
 
-# Then drop the script into your project, or run it from here.
-python ucp_analytics.py
+# Then drop ucp_analytics.py into your project, or run the smoke
+# test from here.
+python smoke_test.py
 ```
 
 There is intentionally no `pyproject.toml` and no install step — this
@@ -80,13 +82,17 @@ does every `SampleAgent` call.
 ## Smoke test (no GCP credentials needed)
 
 ```bash
-python ucp_analytics.py
+python smoke_test.py
 ```
 
 Drives 33 synthetic events through the full pipeline (parser +
 agent), prints each row as a JSON line, and asserts that every one
 of the 32 UCP event types appears at least once. Exits non-zero if
 coverage regresses.
+
+The smoke test lives in `smoke_test.py` (sibling file) and imports
+the public surface of `ucp_analytics.py`. It is a regression check
+on the sample, not part of the sample itself.
 
 ## End-to-end against real BigQuery
 
@@ -95,13 +101,13 @@ coverage regresses.
 gcloud auth application-default login
 
 # Stream the same 33 rows into BigQuery and verify they're queryable.
-python ucp_analytics.py \
+python smoke_test.py \
     --e2e \
     --project-id YOUR_GCP_PROJECT \
     --verify
 
 # Or without --verify if you just want to write and not wait:
-python ucp_analytics.py --e2e --project-id YOUR_GCP_PROJECT
+python smoke_test.py --e2e --project-id YOUR_GCP_PROJECT
 ```
 
 What `--e2e` does:
