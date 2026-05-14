@@ -14,11 +14,10 @@
 
 """smoke_test — regression test for ucp_analytics.py.
 
-This file is **not** a code sample. The style-guide-compliant
-runnable sample is ``quickstart.py``. ``smoke_test.py`` deliberately
-has a multi-mode CLI and a synthetic event corpus because its job
-is to assert spec coverage on every push, which a single-purpose
-sample cannot do.
+This file is **not** a code sample. The canonical runnable sample
+is ``quickstart.py``. ``smoke_test.py`` has a multi-mode CLI and a
+synthetic event corpus because its job is to assert spec coverage
+on every push, which a single-purpose sample cannot do.
 
 Two modes, both driven by the same event generator:
 

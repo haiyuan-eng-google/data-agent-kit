@@ -81,10 +81,8 @@ does every `SampleAgent` call.
 
 ## Quickstart
 
-The canonical runnable sample is `quickstart.py`. It follows the
-[Google Cloud Samples Style Guide](https://googlecloudplatform.github.io/samples-style-guide/)
-(region tags, minimal positional argument, ADC auth, AAA layout,
-no multi-mode CLI):
+The canonical runnable sample is `quickstart.py`. One positional
+argument, ADC auth, end-to-end against your own BigQuery dataset:
 
 ```bash
 # 1. Auth (uses Application Default Credentials).
@@ -102,8 +100,7 @@ python quickstart.py YOUR_GCP_PROJECT \
 The sample uses `httpx.MockTransport` to stand in for a real UCP
 merchant so it is runnable without an external HTTP dependency.
 Drop the mock and point `base_url` at the merchant you want to
-instrument in your own code. The region tag covering the whole
-sample is `ucp_analytics_quickstart`.
+instrument in your own code.
 
 ## Smoke test (no GCP credentials needed)
 
@@ -118,9 +115,8 @@ coverage regresses.
 
 The smoke test lives in `smoke_test.py` (sibling file) and imports
 the public surface of `ucp_analytics.py`. It is a regression check
-on the sample (and therefore deliberately not style-guide-shaped —
-it has a multi-mode CLI on purpose for testing). The style-guide
-sample is `quickstart.py`.
+on the sample — the multi-mode CLI exists for testing, not as a
+template to copy. The canonical sample is `quickstart.py`.
 
 ## End-to-end against real BigQuery
 
