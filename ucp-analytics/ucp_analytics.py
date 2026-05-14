@@ -642,7 +642,15 @@ class UCPTracker:
             body = None
 
         latency_ms: Optional[float] = None
-        elapsed = response.elapsed
+        # ``response.elapsed`` is populated by httpx once the response
+        # is closed. Inside a response event hook the response is
+        # already readable, but ``elapsed`` raises ``RuntimeError`` on
+        # transports that don't track wall time (e.g. ``MockTransport``)
+        # and on some error paths. Treat the field as best-effort.
+        try:
+            elapsed = response.elapsed
+        except RuntimeError:
+            elapsed = None
         if elapsed is not None:
             latency_ms = round(elapsed.total_seconds() * 1000, 2)
 
