@@ -797,4 +797,3 @@ def make_event_hook(tracker: UCPTracker):
         except Exception:
             logger.exception("UCP analytics record failed; dropping event")
     return _hook
-
