@@ -16,6 +16,7 @@
 # requires-python = ">=3.10"
 # dependencies = [
 #   "google-cloud-bigquery>=3.20.0",
+#   "httpx>=0.27.0",
 # ]
 # ///
 
@@ -36,7 +37,7 @@ Run::
     uv run quickstart.py YOUR_GCP_PROJECT
 
     # Or with pip:
-    pip install google-cloud-bigquery
+    pip install httpx google-cloud-bigquery
     python quickstart.py YOUR_GCP_PROJECT
 
 See https://cloud.google.com/docs/authentication/external/about-adc

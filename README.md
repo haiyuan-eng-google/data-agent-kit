@@ -107,7 +107,7 @@ If you are building your own agents or using an interface that supports raw MCP 
 For developers building production agents (e.g., using ADK or LangGraph), we provide opinionated guidance on making your agents observable, safe, and measurable.
 * **[Agent Analytics](./agent-analytics/README.md):** Track usage and performance of agents using BigQuery.
 * **[Agent Evaluation](./agent-evaluation/README.md):** Benchmark and test your agents using EvalBench.
-* **[UCP Analytics](./ucp-analytics/README.md):** Single-file sample implementation that parses [Universal Commerce Protocol](https://ucp.dev) traffic from an `httpx` event hook and streams events into a partitioned, clustered BigQuery table. Covers all 32 UCP spec event types (27 from the parser, 6 from the included `SampleAgent`, one overlap). Ships a `quickstart.py` you can run against your own GCP project plus a `smoke_test.py` regression check. Copy `ucp_analytics.py` into your project and grow the classifier / schema as needed.
+* **[UCP Analytics](./ucp-analytics/README.md):** Two-file sample implementation that parses [Universal Commerce Protocol](https://ucp.dev) traffic from an `httpx` event hook and streams events into a partitioned, clustered BigQuery table. Covers all 32 UCP spec event types (27 from the parser, 6 from the included `SampleAgent`, one overlap). Ships a `quickstart.py` you can run against your own GCP project plus a `smoke_test.py` regression check. Copy `ucp_analytics.py` (parser + writer + tracker) and `sample_agent.py` (agent-emitted event types) into your project and grow the classifier / schema as needed.
 
 ---
 

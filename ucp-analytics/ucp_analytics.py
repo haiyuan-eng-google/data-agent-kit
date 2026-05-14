@@ -238,8 +238,9 @@ def classify(
     HTTPX traffic (the parser). The other 5 fire only at agent
     decision moments (payment outcomes, capability negotiation,
     payment handler / instrument selection) and need explicit
-    ``tracker.record_event`` calls — see ``SampleAgent`` below for
-    the shape. ``order_webhook_received`` is reachable from both
+    ``tracker.record_event`` calls — see ``SampleAgent`` in
+    ``sample_agent.py`` for the shape. ``order_webhook_received``
+    is reachable from both
     surfaces (parser sees outbound POSTs to ``/webhook(s)``;
     ``SampleAgent.webhook_received`` is the entry point for
     server-side handlers).
@@ -581,8 +582,8 @@ class UCPTracker:
         Parses method/path/body, classifies, extracts fields, enqueues.
       * ``record_event(event)`` — for events that don't pass through
         HTTPX (agent decision moments, server-side webhook receipts,
-        out-of-band lifecycle pings). ``SampleAgent`` below shows the
-        common cases.
+        out-of-band lifecycle pings). ``SampleAgent`` in
+        ``sample_agent.py`` shows the common cases.
     """
 
     def __init__(self, writer: BQWriter) -> None:

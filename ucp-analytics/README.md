@@ -1,6 +1,6 @@
 # UCP Analytics — Sample Implementation
 
-A single-file reference for capturing
+A two-file reference for capturing
 [Universal Commerce Protocol](https://ucp.dev) (UCP) traffic from an
 [httpx](https://www.python-httpx.org/) client and streaming events
 into a partitioned, clustered BigQuery table.
